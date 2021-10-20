@@ -65,6 +65,7 @@
 
 #include <unwind/common/unw-throw.h>
 #include <hpcrun/hpcrun_stats.h>
+#include <hpcrun/control-knob.h>
 
 #include <monitor.h>
 
@@ -170,6 +171,8 @@ hpcrun_skip_chords(frame_t* bt_outer, frame_t* bt_inner,
   return &bt_inner[skip];
 }
 
+static _Thread_local int max_unwind_attempts = -1;
+
 //
 // Generate a backtrace, store it in the thread local data
 // Return true/false success code
@@ -194,6 +197,9 @@ hpcrun_generate_backtrace_no_trampoline(backtrace_info_t* bt,
 
   step_state ret = STEP_ERROR; // default return value from stepper
 
+  if(max_unwind_attempts < 0)
+    control_knob_value_get_int("MAX_UNWIND_DEPTH", &max_unwind_attempts);
+
   //--------------------------------------------------------------------
   // note: these variables are not local variables so that if a SIGSEGV 
   // occurs and control returns up several procedure frames, the values 
@@ -209,7 +215,9 @@ hpcrun_generate_backtrace_no_trampoline(backtrace_info_t* bt,
   hpcrun_unw_init_cursor(&cursor, context);
 
   int steps_taken = 0;
+  int attempts = 0;
   do {	// loop over frames in the callstack
+    int last_steps_taken = steps_taken;
     void* ip;
     hpcrun_unw_get_ip_unnorm_reg(&cursor, &ip);
 
@@ -264,6 +272,13 @@ hpcrun_generate_backtrace_no_trampoline(backtrace_info_t* bt,
 
     } else {
       ret = hpcrun_unw_step ( &cursor, &steps_taken);
+    }
+
+    // If we've "unwound" too many frames, probably something is wrong.
+    attempts++;
+    if(attempts > max_unwind_attempts) {
+      EMSG("Unwind took too many attempts, aborting unwind (taken: %d > %d)", steps_taken, last_steps_taken);
+      ret = STEP_ERROR;
     }
 
     switch (ret) {
