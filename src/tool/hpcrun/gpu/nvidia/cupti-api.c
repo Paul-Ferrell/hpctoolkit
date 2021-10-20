@@ -896,6 +896,8 @@ cupti_subscriber_callback
 		return;
 	}
 
+  int oursafe = hpcrun_safe_enter();
+
   if (domain == CUPTI_CB_DOMAIN_RESOURCE) {
     const CUpti_ResourceData *rd = (const CUpti_ResourceData *) cb_info;
     if (cb_id == CUPTI_CBID_RESOURCE_MODULE_LOADED) {
@@ -1302,6 +1304,8 @@ cupti_subscriber_callback
         "cuda_runtime %d", is_kernel_op, is_valid_op, cupti_runtime_api_flag);
     }
   }
+
+  if(oursafe) hpcrun_safe_exit();
 }
 
 
