@@ -1058,7 +1058,7 @@ cupti_subscriber_callback
 
         gpu_op_ccts_t gpu_op_ccts;
 
-        hpcrun_safe_enter();
+        int oursafe = hpcrun_safe_enter();
 
         gpu_op_ccts_insert(api_node, &gpu_op_ccts, gpu_op_placeholder_flags);
 
@@ -1073,7 +1073,7 @@ cupti_subscriber_callback
 	  ensure_kernel_ip_present(trace_ph, kernel_ip);
         }
 
-        hpcrun_safe_exit();
+        if(oursafe) hpcrun_safe_exit();
 
         // Generate notification entry
         uint64_t cpu_submit_time = hpcrun_nanotime();
@@ -1215,11 +1215,11 @@ cupti_subscriber_callback
 
         gpu_op_ccts_t gpu_op_ccts;
 
-        hpcrun_safe_enter();
+        int oursafe = hpcrun_safe_enter();
 
         gpu_op_ccts_insert(api_node, &gpu_op_ccts, gpu_op_placeholder_flags_all);
 
-        hpcrun_safe_exit();
+        if(oursafe) hpcrun_safe_exit();
 
         cupti_kernel_ph = gpu_op_ccts_get(&gpu_op_ccts, gpu_placeholder_type_kernel);
         cupti_trace_ph = gpu_op_ccts_get(&gpu_op_ccts, gpu_placeholder_type_trace);

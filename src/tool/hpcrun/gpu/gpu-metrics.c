@@ -605,7 +605,7 @@ gpu_metrics_attribute
 {
   thread_data_t *td = hpcrun_get_thread_data();
   td->overhead++;
-  hpcrun_safe_enter();
+  int oursafe = hpcrun_safe_enter();
 
   switch (activity->kind) {
   case GPU_ACTIVITY_PC_SAMPLING: 
@@ -656,7 +656,7 @@ gpu_metrics_attribute
     break;
   }
 
-  hpcrun_safe_exit();
+  if(oursafe) hpcrun_safe_exit();
   td->overhead--;
 }
 
