@@ -63,6 +63,10 @@
 #include <variant>
 #include <vector>
 
+namespace YAML {
+class Emitter;
+}
+
 namespace hpctoolkit {
 
 class Context;
@@ -122,6 +126,7 @@ private:
 
 /// Standard stringification for Statistic::combination_t values
 std::ostream& operator<<(std::ostream&, Statistic::combination_t);
+YAML::Emitter& operator<<(YAML::Emitter&, Statistic::combination_t);
 
 /// A StatisticPartial is the "accumulate" and "combine" parts of a Statistic.
 /// There may be multiple Partials used for a Statistic, and multiple Statistics

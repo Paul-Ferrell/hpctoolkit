@@ -49,6 +49,8 @@
 #include "context.hpp"
 #include "attributes.hpp"
 
+#include <yaml-cpp/yaml.h>
+
 #include <forward_list>
 #include <stack>
 #include <thread>
@@ -61,6 +63,14 @@ std::ostream& hpctoolkit::operator<<(std::ostream& os, Statistic::combination_t 
   case Statistic::combination_t::sum: return os << "sum";
   case Statistic::combination_t::min: return os << "min";
   case Statistic::combination_t::max: return os << "max";
+  }
+  std::abort();
+}
+YAML::Emitter& hpctoolkit::operator<<(YAML::Emitter& e, Statistic::combination_t c) {
+  switch(c) {
+  case Statistic::combination_t::sum: return e << "sum";
+  case Statistic::combination_t::min: return e << "min";
+  case Statistic::combination_t::max: return e << "max";
   }
   std::abort();
 }
