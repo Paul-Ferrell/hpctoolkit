@@ -39,22 +39,31 @@ The `meta.db` has the following overall structure:
     |                                                          |          4 bytes
     | General Properties section size (general_size)           |  24 18,  8 bytes
     | General Properties section offset (general_ptr)          |  32 20,  8 bytes
-    | Performance Metric section size (metric_size)            |  40 28,  8 bytes
-    | Performance Metric section offset (metric_ptr)           |  48 30
-    | Context Tree section size (ctree_size)                   |  56 38,  8 bytes
-    | Context Tree section offset (ctree_ptr)                  |  64 40,  8 bytes
-    | Context Attribute Strings section size (str_size)        |  72 48,  8 bytes
-    | Context Attribute Strings section offset (str_ptr)       |  80 50,  8 bytes
-    | Application Binary section size (binaries_size)          |  88 58,  8 bytes
-    | Application Binary section offset (binaries_ptr)         |  96 60,  8 bytes
-    | Source File section size (files_size)                    | 104 68,  8 bytes
-    | Source File section offset (files_ptr)                   | 112 70,  8 bytes
-    | Function section size (funcs_size)                       | 120 78,  8 bytes
-    | Function section offset (funcs_ptr)                      | 128 80,  8 bytes
+    | Hierarchical Identifier Table size (idtable_size)        |  40 28,  8 bytes
+    | Hierarchical Identifier Table offset (idtable_ptr)       |  48 30,  8 bytes
+    | Performance Metric section size (metric_size)            |  56 38,  8 bytes
+    | Performance Metric section offset (metric_ptr)           |  64 40,  8 bytes
+    | Context Tree section size (ctree_size)                   |  72 48,  8 bytes
+    | Context Tree section offset (ctree_ptr)                  |  80 50,  8 bytes
+    | Context Attribute Strings section size (str_size)        |  88 58,  8 bytes
+    | Context Attribute Strings section offset (str_ptr)       |  96 60,  8 bytes
+    | Load Module section size (modules_size)                  | 104 68,  8 bytes
+    | Load Module section offset (modules_ptr)                 | 112 70,  8 bytes
+    | Source File section size (files_size)                    | 120 70,  8 bytes
+    | Source File section offset (files_ptr)                   | 128 80,  8 bytes
+    | Function section size (funcs_size)                       | 136 88,  8 bytes
+    | Function section offset (funcs_ptr)                      | 144 90,  8 bytes
     |                                                          |
     |--- General Properties section ---------------------------| (general_ptr), (general_size)
     | Null-terminated database title                           |  0  0, **
-    | Hierarchical Identifier Table (see below)                | ** **, **
+    | Null-terminated database description (Markdown)          | ** **, **
+    |                                                          |
+    |--- Hierarchical Identifier Table ------------------------| (idtable_ptr), (idtable_size)
+    | Number of identifier kinds (num_kinds)                   |  0  0, 2 bytes
+    | Null-terminated name for identifier kind 0               |  2  2, **
+    | Null-terminated name for identifier kind 1               | ** **, **
+    | ...                                                      | ...
+    | Null-terminated name for identifier kind (num_kinds - 1) | ** **, **
     |                                                          |
     |--- Performance Metric section ---------------------------| (metric_ptr), metric_size)
     | Number of Performance Metrics (num_metrics)              |  0  0, 4 bytes
@@ -63,13 +72,13 @@ The `meta.db` has the following overall structure:
     | ...                                                      | ...
     | Performance Metric Specification (num_metrics - 1)       | ** **, **
     |                                                          |
-    |--- Application Binary section ---------------------------| (binaries_ptr), (binaries_size)
-    | Number of Application Binaries (num_binaries)            |  0  0, 4 bytes
-    | Size of Application Binary Specification (size_binary)   |  4  4, 2 bytes
-    | Application Binary Specification 0 (see below)           |  6  6, (size_binary)
-    | Application Binary Specification 1                       | ** **, (size_binary)
+    |--- Load Module section ----------------------------------| (modules_ptr), (modules_size)
+    | Number of Load Modules (num_modules)                     |  0  0, 4 bytes
+    | Size of Load Module Specification (size_module)          |  4  4, 2 bytes
+    | Load Module Specification 0 (see below)                  |  6  6, (size_module)
+    | Load Module Specification 1                              | ** **, (size_module)
     | ...                                                      | ...
-    | Application Binary Specification (num_binaries - 1)      | ** **, (size_binary)
+    | Load Module Specification (num_binaries - 1)             | ** **, (size_module)
     |                                                          |
     |--- Source File section ----------------------------------| (files_ptr), (files_size)
     | Number of Source Files (num_files)                       |  0  0, 4 bytes
@@ -100,21 +109,6 @@ The `meta.db` has the following overall structure:
     |----------------------------------------------------------|
     | Magic footer ("PROFDBmn" or "nmBDFORP")                  | ** **, 8 bytes
     |----------------------------------------------------------| EOF
-
-### Hierarchical Identifier Table ###
-The Hierarchical Identifier Table provides a human-readable interpretation of
-the [Hierarchical Identifier Tuple](#hierarchical-identifier-tuple) `kind`
-field.
-
-The table has the following structure:
-
-    |-----------------------------------------------------------|
-    | Number of identifier kinds (num_kinds)                    | ** **, 2 bytes
-    | Null-terminated name for identifier kind 0                | ** **, **
-    | Null-terminated name for identifier kind 1                | ** **, **
-    | ...                                                       | ...
-    | Null-terminated name for identifier kind (num_kinds - 1)  | ** **, **
-    |-----------------------------------------------------------|
 
 ### Performance Metric Specification ###
 Each Performance Metric Specification describes a metric that was measured at
@@ -161,13 +155,13 @@ The identifying formula `(formula)` corresponds to the `inputs:formula` key in
 METRICS.yaml. The format is the same as `!!str` formulas in `METRICS.yaml`,
 except whitespace is removed and `$$` indicates the input (propagated) value.
 
-### Application Binary Specification ###
-Each Application Binary Specification describes a binary that was used by the
+### Load Module Specification ###
+Each Load Module Specification describes a binary that was used by the
 application execution.
 
 Each specification has the following structure:
 
-    |---------------------------------------------| (size_binary) = 12 bytes
+    |---------------------------------------------| (size_module) = 12 bytes
     | Binary Flags (flags)                        |  0  0, 4 bytes
     | Null-terminated filepath offset (path_ptr)  |  4  4, 8 bytes
     |---------------------------------------------|
@@ -203,8 +197,8 @@ Each specification has the following structure:
     |---------------------------------------------------------------| (size_func) = 40 bytes
     | Function Flags (flags)                                        |  0  0, 4 bytes
     | 0 or Null-terminated name offset (name_ptr)                   |  4  4, 8 bytes
-    | 0 or Enclosing Application Binary Spec. offset (binary_ptr)   | 12  C, 8 bytes
-    | -1 or Offset in enclosing application binary (binary_offset)  | 20 14, 8 bytes
+    | 0 or Enclosing Load Module Spec. offset (module_ptr)          | 12  C, 8 bytes
+    | -1 or Offset in enclosing Load Module (module_offset)         | 20 14, 8 bytes
     | 0 or Defining Source File Spec. offset (def_fileptr)          | 28 1C, 8 bytes
     | 0 or Line number of definition (def_line)                     | 36 24, 4 bytes
     |---------------------------------------------------------------|
@@ -215,10 +209,10 @@ If `(name_ptr)` is not `0`, it points within the Context Attributes Strings
 section. If `(name_ptr)` is `0`, this function is anonymous (either it has no
 name or its name is unknown).
 
-If `(binary_ptr)` is not `0`, it points to an Application Binary Specification
-located in the Application Binary section. If `(binary_ptr)` is `0`,
-`(binary_offset)` should be ignored. If `(binary_offset)` is
-`-1 == 0xFFFFFFFFFFFFFFFF` it should be ignored.
+If `(module_ptr)` is not `0`, it points to an Load Module Specification located
+in the Load Module section. If `(module_ptr)` is `0`, `(module_offset)` should
+be ignored. If `(binary_offset)` is `-1 == 0xFFFFFFFFFFFFFFFF` it should be
+ignored.
 
 If `(def_fileptr)` is not `0`, it points to a Source File Specification located
 in the Source File section. If `(def_fileptr)` is `0`, `def_line` should be
@@ -299,8 +293,8 @@ Each lexical specification has the following structure:
     |   Line number in source file (src_line)         | +  8  8, 4 bytes
     | }                                               |
     | if(has_point) {                                 |
-    |   Application Binary Spec. offset (binary_ptr)  | +  0  0, 8 bytes
-    |   Offset in application binary (binary_offset)  | +  8  8, 8 bytes
+    |   Load Module Spec. offset (module_ptr)         | +  0  0, 8 bytes
+    |   Offset in Load Module (module_offset)         | +  8  8, 8 bytes
     | }                                               |
     |-------------------------------------------------|
 
@@ -312,7 +306,7 @@ The Lexical Type `(lex_type)` is an enumeration with the following values:
    line with the loop header.
  - `2`: Source line. `(src_fileptr)` and `(src_line)` indicate the source line
    in question.
- - `3`: Single "point" instruction. `(binary_ptr)` and `(binary_offset)`
+ - `3`: Single "point" instruction. `(module_ptr)` and `(module_offset)`
    indicate the first byte of the instruction in question.
 
 Lexical Flags `(lex_flags)` is a bitfield composed of the following values:
@@ -326,7 +320,7 @@ Lexical Flags `(lex_flags)` is a bitfield composed of the following values:
    Specification. This only applies to the nearest non-empty Callee
    Specification, deeper calls are not affected.
 
-`(func_ptr)`, `(src_fileptr)` and `(binary_ptr)` point within their respective
+`(func_ptr)`, `(src_fileptr)` and `(module_ptr)` point within their respective
 sections.
 
 `profile.db` version 4.0
