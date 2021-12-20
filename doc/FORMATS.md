@@ -5,6 +5,9 @@ A full HPCToolkit database consists of the following files and directories:
 
     database/
     |-- FORMATS.md     This file
+    |-- metrics/       Taxonomic metric descriptions for analysis presentations
+    |   |-- METRICS.yaml.ex  Documentation for the metric taxonomy YAML format
+    |   `-- default.yaml     Default metric taxonomy, suitable for most cases
     |-- meta.db        Properties of the measured application execution
     |-- profile.db     Performance measurements arranged by application thread
     |-- cct.db         Performance measurements arranged by calling context
