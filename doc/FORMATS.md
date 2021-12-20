@@ -119,7 +119,7 @@ Each specification has the following structure:
 
     |----------------------------------------------------------------------|
     | Number of propagation scopes (num_scopes)                            |  0  0, 2 bytes
-    | Null-terminated identifier for the root metric                       |  2  2, **
+    | Null-terminated identifier for the root metric (name)                |  2  2, **
     | Propagation scope info 0 {                                           | ** **, **
     |   Metric id for non-summary metric values in profile.db (raw_mid)    | +  0  0, 2 bytes
     |   Number of summary formulations (num_summaries)                     | +  2  2, 2 bytes
@@ -138,13 +138,19 @@ Each specification has the following structure:
     | Propagation scope info (num_scopes - 1)                              | ** **, **
     |----------------------------------------------------------------------|
 
+The root metric identifier `(name)` corresponds to the `inputs:name` key in
+`METRICS.yaml`. This is a canonical name of the metric measured in `hpcrun`.
+
 The propagation scope identifier `(scope)` corresponds to the `inputs:scope` key
-in `METRICS.yaml`. Common values are:
+in `METRICS.yaml`. Common values for this identifier include:
  - `execution`: These metric values are the inclusive cost of the root metric,
    including costs for inner and called contexts.
  - `function`: These metric values are the exclusive cost of the root metric,
    only including costs within the attributed-to function.
  - `point`: These metric values are the unpropagated costs of the root metric.
+
+`(scope)` values may be added or changed/renamed in future versions of
+HPCToolkit with no format version bump.
 
 The combination formula `(combine)` is an enumeration with the following values:
  - `0`: Sum of inputs. Corresponds to `inputs:combine: sum` in `METRICS.yaml`.
@@ -210,19 +216,26 @@ section. If `(name_ptr)` is `0`, this function is anonymous (either it has no
 name or its name is unknown).
 
 If `(module_ptr)` is not `0`, it points to an Load Module Specification located
-in the Load Module section. If `(module_ptr)` is `0`, `(module_offset)` should
-be ignored. If `(binary_offset)` is `-1 == 0xFFFFFFFFFFFFFFFF` it should be
-ignored.
+in the Load Module section, and `(module_offset)` is valid if not
+`-1` (all-ones). If `(module_ptr)` is `0`, this function does not reside in a
+load module.
 
 If `(def_fileptr)` is not `0`, it points to a Source File Specification located
-in the Source File section. If `(def_fileptr)` is `0`, `def_line` should be
-ignored. If `(def_line)` is `0` it should be ignored.
+in the Source File section, and `(def_line)` is valid if not `0`.
+If `(def_fileptr)` is `0`, this function is not defined in a source file (either
+unknown or does not exist).
+
+Note that Function Specifications may differ by any number of fields: functions
+may have the same name but different load modules, or the same load module
+offset but different defining source lines, etc. It is up to the reader to merge
+functions with inconsequential differences depending on the reader's needs.
 
 ### Context Tree Sibling Block and Context Node ###
-A Context Tree Sibling Block is a dense sequence of sibling Context Tree Nodes,
-arranged for quick ingestion with a single read. The children of a Node are
-represented by a Sibling Block. A Context Tree Node represents a single
-source-level calling context within the application execution.
+Each Context Tree Node represents a single calling or source-level context
+within the application execution. The children of a Node are represented by a
+Context Tree Sibling Block, which is a dense sequence of sibling Context Tree
+Nodes, arranged for quick ingestion with a single read. These two structures are
+thus tightly bound and recursive.
 
 Each Sibling Block has the following structure:
 
@@ -274,7 +287,8 @@ Callee Flags `(call_flags)` is a bitfield composed of the following values:
    derived from a parent Lexical Specification, see there for more details.
 
 If present, `(caller_fileptr)` points to a Source File Specification located in
-the Source File section. If `(caller_line)` is `0` it should be ignored.
+the Source File section. If `(caller_line)` is `0` the line containing the call
+is not known.
 
 ### Lexical Specification ###
 The Lexical Specification describes the context of a CT Node. The presence of
