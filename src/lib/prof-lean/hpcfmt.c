@@ -141,22 +141,30 @@ hpcfmt_str_free(const char* str, hpcfmt_free_fn dealloc)
 int hpcfmt_nullstr_fread(char** str, FILE* infs) {
   *str = NULL;
   size_t cur = 0, size = 0;
+  int next;
   do {
     if(cur == size) {
+      size += 4096;
       char* nextstr = realloc(*str, size);
       if(nextstr == NULL) {
         free(*str);
         *str = NULL;
         return HPCFMT_ERR;
       }
-      size += 4096;
+      *str = nextstr;
     }
-    if(fread(*str + cur, 1, 1, infs) < 1) {
+    next = getc(infs);
+    if(next == EOF) {
       free(*str);
       *str = NULL;
       return HPCFMT_ERR;
     }
-  } while((*str)[cur] != '\0');
+    (*str)[cur] = (unsigned char)next;
+    ++cur;
+  } while(next != '\0');
+
+  char* finalstr = realloc(*str, cur);
+  if(finalstr != NULL) *str = finalstr;
   return HPCFMT_OK;
 }
 

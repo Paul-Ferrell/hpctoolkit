@@ -81,14 +81,13 @@ extern "C" {
 #define HPCMETADB_FMT_VersionLen   2
 #define HPCMETADB_FMT_NumSecLen    2
 #define HPCMETADB_FMT_PaddingLen   4
-#define HPCMETSDB_FMT_SecSizeLen   8
+#define HPCMETADB_FMT_SecSizeLen   8
 #define HPCMETADB_FMT_SecPtrLen    8
 #define HPCMETADB_FMT_SecLen       (HPCMETADB_FMT_SecSizeLen + HPCMETADB_FMT_SecPtrLen)
 
-#define HPCMETADB_FMT_Real_HeaderLen  (HPCMETADB_FMT_MagicLen + HPCMETADB_FMT_VersionLen \
+#define HPCMETADB_FMT_HeaderLen  (HPCMETADB_FMT_MagicLen + HPCMETADB_FMT_VersionLen \
   + HPCMETADB_FMT_NumSecLen + HPCMETADB_FMT_PaddingLen \
   + HPCMETADB_FMT_SecLen * HPCMETADB_FMT_NumSec)
-#define HPCMETADB_FMT_HeaderLen    128
 
 typedef struct metadb_hdr_t {
   uint8_t versionMajor;

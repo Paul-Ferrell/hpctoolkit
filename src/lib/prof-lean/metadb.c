@@ -298,6 +298,7 @@ int metadb_metric_fprint(const metadb_metric_t* met, FILE* fs, const char* pfx) 
   fprintf(fs, "%s  (num_scopes: %"PRIu16")\n", pfx, met->num_scopes);
   fprintf(fs, "%s  (name: %s)\n", pfx, met->name);
   fprintf(fs, "%s]\n", pfx);
+  return HPCFMT_OK;
 }
 
 void metadb_metric_scope_free(metadb_metric_scope_t* scope, hpcfmt_free_fn dealloc) {
@@ -508,6 +509,7 @@ int metadb_func_fprint(const metadb_func_t* func, FILE* fs, FILE* infs, const ch
     free(newpfx);
   }
   fprintf(fs, "%s]", pfx);
+  return HPCFMT_OK;
 }
 
 //***************************************************************************
