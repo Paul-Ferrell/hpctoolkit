@@ -134,6 +134,39 @@ hpcfmt_str_free(const char* str, hpcfmt_free_fn dealloc)
   dealloc((void *)str);
 }
 
+//***************************************************************************
+// null-terminated string support
+//***************************************************************************
+
+int hpcfmt_nullstr_fread(char** str, FILE* infs) {
+  *str = NULL;
+  size_t cur = 0, size = 0;
+  do {
+    if(cur == size) {
+      char* nextstr = realloc(*str, size);
+      if(nextstr == NULL) {
+        free(*str);
+        *str = NULL;
+        return HPCFMT_ERR;
+      }
+      size += 4096;
+    }
+    if(fread(*str + cur, 1, 1, infs) < 1) {
+      free(*str);
+      *str = NULL;
+      return HPCFMT_ERR;
+    }
+  } while((*str)[cur] != '\0');
+  return HPCFMT_OK;
+}
+
+int hpcfmt_nullstr_fwrite(const char* str, FILE* fs) {
+  str = hpcfmt_str_ensure(str);
+  size_t len = strlen(str) + 1;  // Includes the \0
+  if(fwrite(str, 1, len, fs) < len) return HPCFMT_ERR;
+  return HPCFMT_OK;
+}
+
 
 //***************************************************************************
 // generic read and write
