@@ -176,7 +176,7 @@ int rankN(ProfArgs&& args) {
 
     // We only emit our part of the MetricDB and TraceDB.
     switch(args.format) {
-    case ProfArgs::Format::sparse:
+    case ProfArgs::Format::exml:
     case ProfArgs::Format::metadb:
       if(args.include_traces)
         pipelineB2 << make_unique_x<sinks::HPCTraceDB2>(args.output);

@@ -270,7 +270,7 @@ ProfArgs::ProfArgs(int argc, char* const argv[])
       break;
     case 'f': {
       std::string form(optarg);
-      if(form == "sparse") format = Format::sparse;
+      if(form == "exml") format = Format::exml;
       else if(form == "metadb") format = Format::metadb;
       else {
         std::cerr << "Unrecognized output format '" << form << "'!\n";

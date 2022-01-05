@@ -96,7 +96,7 @@ int main(int argc, char* const argv[]) {
   pipelineB << dc;
 
   switch(args.format) {
-  case ProfArgs::Format::sparse: {
+  case ProfArgs::Format::exml: {
     std::unique_ptr<sinks::HPCTraceDB2> tdb;
     if(args.include_traces)
       tdb = make_unique_x<sinks::HPCTraceDB2>(args.output);

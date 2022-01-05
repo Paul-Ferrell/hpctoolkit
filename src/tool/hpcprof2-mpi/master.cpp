@@ -165,7 +165,7 @@ int rank0(ProfArgs&& args) {
 
   // Finally, eventually we get to actually write stuff out.
   switch(args.format) {
-  case ProfArgs::Format::sparse: {
+  case ProfArgs::Format::exml: {
     std::unique_ptr<sinks::HPCTraceDB2> tdb;
     if(args.include_traces)
       tdb = make_unique_x<sinks::HPCTraceDB2>(args.output);

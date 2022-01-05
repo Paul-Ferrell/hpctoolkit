@@ -153,8 +153,8 @@ public:
 
   /// Enum for possible output formats for profile data
   enum class Format {
-    // experiment.xml + sparse thing, the current database format.
-    sparse,
+    // experiment.xml + profile.db + cct.db + thread.db, the current database format.
+    exml,
     // meta.db + profile.db + cct.db + thread.db, the new proposed database format.
     metadb,
   };
