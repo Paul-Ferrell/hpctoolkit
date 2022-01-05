@@ -60,6 +60,8 @@ public:
 
   MetaDB(stdshim::filesystem::path dir, bool copySources);
 
+  static std::string accumulateFormulaString(const Expression&);
+
   void write() override;
 
   DataClass accepts() const noexcept override {

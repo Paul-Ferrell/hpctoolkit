@@ -68,7 +68,7 @@ static I align(I v, uint8_t a) {
   return (v + a - 1) / a * a;
 }
 
-static std::string formula(const Expression& e) {
+std::string MetaDB::accumulateFormulaString(const Expression& e) {
   std::ostringstream ss;
   std::stack<bool, std::vector<bool>> first;
   first.push(true);
@@ -199,7 +199,7 @@ void MetaDB::write() {
           util::log::fatal{} << "Error while writing " << metadb.string() << " metrics!";
 
         for(const auto& part: m.partials()) {
-          auto form = formula(part.accumulate());
+          auto form = accumulateFormulaString(part.accumulate());
           metadb_metric_summary_t sum = {
             (uint16_t)id.getFor(part, ms), 0xFF, const_cast<char*>(form.c_str())
           };
