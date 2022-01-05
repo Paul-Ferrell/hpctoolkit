@@ -426,33 +426,15 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
       for(const auto& mx: accums->citerate()) {
         const Metric& m = mx.first;
         const auto& vv = mx.second;
-        if(!m.scopes().has(MetricScope::function) || !m.scopes().has(MetricScope::execution))
-          util::log::fatal{} << "Metric isn't function/execution!";
         const auto& id = m.userdata[src.identifier()];
-        if(auto vex = vv.get(MetricScope::function)) {
-          addMvPair(id.getFor(MetricScope::function), *vex);
-          nValues++;
-          // HACK conditional to work around experiment.xml. Line Scopes are
-          // emitted as leaves (<S>), so they should have no extra inclusive cost.
-          if(c.scope().flat().type() == Scope::Type::line) {
-            addMvPair(id.getFor(MetricScope::execution), *vex);
-            nValues++;
-          }
-        }
-        // HACK conditional to work around experiment.xml. Line Scopes are
-        // emitted as leaves (<S>), so they should have no extra inclusive cost.
-        if(c.scope().flat().type() != Scope::Type::line) {
-          if(auto vinc = vv.get(MetricScope::execution)) {
-            addMvPair(id.getFor(MetricScope::execution), *vinc);
+        for(MetricScope ms: m.scopes()) {
+          if(auto v = vv.get(ms)) {
+            addMvPair(id.getFor(ms), *v);
             nValues++;
           }
         }
       }
       c.userdata[ud].nValues.fetch_add(nValues, std::memory_order_relaxed);
-      // HACK conditional to support the above HACKs. Its now possible (although
-      // hopefully rare) for a Context to have no metric values.
-      if(nValues == 0)
-        ciPairsBuf.resize(ciPairsBuf.size() - PMS_ctx_pair_SIZE);
     }
   }
 

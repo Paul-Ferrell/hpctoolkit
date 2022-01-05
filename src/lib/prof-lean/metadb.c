@@ -352,8 +352,11 @@ int metadb_metric_summary_fprint(const metadb_metric_summary_t* sum, FILE* fs, c
   fprintf(fs, "%s[summarized metric:\n", pfx);
   fprintf(fs, "%s  (summary_mid: %"PRIu16")\n", pfx, sum->summary_mid);
   fprintf(fs, "%s  (combine: %"PRIu8" = %s)\n", pfx, sum->combine,
-          sum->combine == 0 ? "SUM" : sum->combine == 1 ? "MIN" :
-          sum->combine == 2 ? "MAX" : "???");
+          sum->combine == HPCMETADB_FMT_COMBINE_SUM ? "SUM" :
+          sum->combine == HPCMETADB_FMT_COMBINE_MIN ? "MIN" :
+          sum->combine == HPCMETADB_FMT_COMBINE_MAX ? "MAX" :
+          "???");
+  fprintf(fs, "%s  (formula: %s)\n", pfx, sum->formula);
   fprintf(fs, "%s]\n", pfx);
   return HPCFMT_OK;
 }

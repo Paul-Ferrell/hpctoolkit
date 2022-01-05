@@ -52,6 +52,7 @@
 #include "lib/profile/source.hpp"
 #include "lib/profile/sinks/experimentxml4.hpp"
 #include "lib/profile/sinks/hpctracedb2.hpp"
+#include "lib/profile/sinks/metadb.hpp"
 #include "lib/profile/sinks/metricsyaml.hpp"
 #include "lib/profile/sinks/sparsedb.hpp"
 #include "lib/profile/finalizers/denseids.hpp"
@@ -104,6 +105,14 @@ int main(int argc, char* const argv[]) {
     pipelineB << std::move(tdb);
     pipelineB << make_unique_x<sinks::SparseDB>(args.output);
     pipelineB << make_unique_x<sinks::MetricsYAML>(args.output);
+    break;
+  }
+  case ProfArgs::Format::metadb: {
+    pipelineB << make_unique_x<sinks::MetaDB>(args.output, args.include_sources)
+              << make_unique_x<sinks::SparseDB>(args.output)
+              << make_unique_x<sinks::MetricsYAML>(args.output);
+    if(args.include_traces)
+      pipelineB << make_unique_x<sinks::HPCTraceDB2>(args.output);
     break;
   }
   }

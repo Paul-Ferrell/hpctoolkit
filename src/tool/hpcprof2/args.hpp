@@ -155,6 +155,8 @@ public:
   enum class Format {
     // experiment.xml + sparse thing, the current database format.
     sparse,
+    // meta.db + profile.db + cct.db + thread.db, the new proposed database format.
+    metadb,
   };
   /// Requested output format
   Format format;
