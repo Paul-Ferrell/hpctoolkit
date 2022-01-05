@@ -98,6 +98,9 @@ tracedb_hdr_fwrite(tracedb_hdr_t* hdr,FILE* fs)
   HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(hdr->trace_hdr_sec_size, fs));
   HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(HPCTRACEDB_FMT_HeaderLen, fs));
 
+  HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(hdr->minimum_time, fs));
+  HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(hdr->maximum_time, fs));
+
   return HPCFMT_OK;
 }
 
@@ -113,6 +116,9 @@ tracedb_hdr_swrite(tracedb_hdr_t* hdr, char* buf)
 
   buf = hpcfmt_int8_swrite(hdr->trace_hdr_sec_size, buf);
   buf = hpcfmt_int8_swrite(HPCTRACEDB_FMT_HeaderLen, buf);
+
+  buf = hpcfmt_int8_swrite(hdr->minimum_time, buf);
+  buf = hpcfmt_int8_swrite(hdr->maximum_time, buf);
   return buf;
 }
 
@@ -144,6 +150,8 @@ tracedb_hdr_fread(tracedb_hdr_t* hdr, FILE* infs)
   HPCFMT_ThrowIfError(hpcfmt_int2_fread(&(hdr->num_sec), infs));
   HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(hdr->trace_hdr_sec_size), infs));
   HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(hdr->trace_hdr_sec_ptr), infs));
+  HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(hdr->minimum_time), infs));
+  HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(hdr->maximum_time), infs));
 
   return HPCFMT_OK;
 }
@@ -159,6 +167,8 @@ tracedb_hdr_fprint(tracedb_hdr_t* hdr, FILE* fs)
   fprintf(fs, "  (num_sec: %d)\n", hdr->num_sec);
   fprintf(fs, "  (trace_hdr_sec_size: %ld)\n", hdr->trace_hdr_sec_size);
   fprintf(fs, "  (trace_hdr_sec_ptr: %ld)\n", hdr->trace_hdr_sec_ptr);
+  fprintf(fs, "  (minimum_time: %"PRIu64")\n", hdr->minimum_time);
+  fprintf(fs, "  (maximum_time: %"PRIu64")\n", hdr->maximum_time);
   fprintf(fs, "]\n");
 
   return HPCFMT_OK;

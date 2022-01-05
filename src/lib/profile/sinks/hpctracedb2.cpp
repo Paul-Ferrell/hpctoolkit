@@ -89,28 +89,12 @@ void HPCTraceDB2::notifyWavefront(DataClass d){
       traceinst = tracefile->open(true, true);
     }
 
-    //initialize the hdr to write
-    tracedb_hdr_t hdr;
-
-    //assign value to trace_hdrs_size
-    uint32_t num_traces = getTotalNumTraces();
-    trace_hdrs_size = num_traces * trace_hdr_SIZE;
-    hdr.num_trace = num_traces;
-    hdr.trace_hdr_sec_size = trace_hdrs_size;
+    totalNumTraces = getTotalNumTraces();
+    trace_hdrs_size = totalNumTraces * trace_hdr_SIZE;
 
     //calculate the offsets for later stored in start and end
     //assign the values of the hdrs
     assignHdrs(calcStartEnd());
-
-    //open the trace.db for writing, and write magic string, version number and number of tracelines
-    if(mpi::World::rank() == 0) {
-      std::array<char, HPCTRACEDB_FMT_Real_HeaderLen> buf;
-      tracedb_hdr_swrite(&hdr, buf.data());
-      if(tracefile) traceinst.writeat(0, buf);
-    }
-
-    // Ensure the file is truncated by rank 0 before proceeding.
-    mpi::barrier();
   }
 
   // Write out the headers for threads that have no timepoints
@@ -229,7 +213,26 @@ std::string HPCTraceDB2::exmlTag() {
   return ss.str();
 }
 
-void HPCTraceDB2::write() {}
+void HPCTraceDB2::write() {
+  if(mpi::World::rank() != 0) return;
+  if(!tracefile) return;
+  auto traceinst = tracefile->open(true, true);
+
+  // Fill up a header structure with the proper data
+  tracedb_hdr_t hdr;
+  hdr.num_trace = totalNumTraces;
+  hdr.trace_hdr_sec_size = trace_hdrs_size;
+
+  auto [min, max] = src.timepointBounds().value_or(std::make_pair(
+      std::chrono::nanoseconds::zero(), std::chrono::nanoseconds::zero()));
+  hdr.minimum_time = min.count();
+  hdr.maximum_time = max.count();
+
+  // Write out the trace.db header now
+  std::array<char, HPCTRACEDB_FMT_Real_HeaderLen> buf;
+  tracedb_hdr_swrite(&hdr, buf.data());
+  traceinst.writeat(0, buf);
+}
 
 
 //***************************************************************************

@@ -92,6 +92,7 @@ public:
 private:
   std::optional<hpctoolkit::util::File> tracefile;
   std::atomic<bool> has_traces{false};
+  size_t totalNumTraces;
 
   util::Once threadsReady;
 
