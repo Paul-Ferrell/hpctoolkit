@@ -19,18 +19,23 @@ version: !!int 0
 # does not matter.
 inputs: !!seq
   - &in-perf-cycles-Ex
-    # (Required) Name of the metric, as listed in experiment.xml.
+    # (Required) Name of a metric, listed in a Performance Metric Specification
+    # in meta.db. See FORMATS.md for details.
     metric: !!str perf::cycles
-    # (Required) Scope of the metric, as listed in experiment.xml.
+    # (Required) Propagation scope for a metric, listed within a Performance
+    # Metric Specification in meta.db. See FORMATS.md for details.
     scope: !!str exclusive
-    # (Optional) Formula applied to the metric before combination, as listed in
-    # experiment.xml. `$$` is the variable for the input raw metric value.
-    # If omitted, defaults to `$$` like in experiment.xml.
-    formula: !!str $$
-    # (Optional) Combination operation, as listed in experiment.xml. As per over
-    # there, one of 'sum', 'min' and 'max'.
-    # If omitted, defaults to 'sum'.
+    # (Optional) Combination operation used for summary metric values, listed
+    # within a Performance Metric Specification in meta.db. See FORMATS.md for
+    # details. May be 'sum', 'min', or 'max', if omitted defaults to 'sum'.
     combine: !!str sum
+    # (Optional) Formula pre-applied for summary metric values, listed within a
+    # Performance Metric Specification in meta.db. See FORMATS.md for details.
+    # Follows the same format as formulas in this format, except:
+    #  - Must be a single !!str ($$ is used in place of the input value), and
+    #  - Whitespace and extraneous parentheticals are removed.
+    # If omitted, defaults to `$$`.
+    formula: !!str $$
 
   - &in-perf-cycles-Ix
     metric: perf::cycles [inclusive]
