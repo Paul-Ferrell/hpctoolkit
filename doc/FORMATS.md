@@ -44,9 +44,9 @@ as a table where each row describes a single field:
  - **Type** lists the interpretation of the field's bytes, along with
    (implicitly) its size. The standard types are as follows:
    * s`N`/u`N`/i`N` is a signed/unsigned/signless integer of `N` bits.
-     Multi-byte integers are laid out in big-endian order.
+     Multi-byte integers are laid out in little-endian order.
    * f64 is an IEEE 754 double-precision floating-point number, laid out in
-     big-endian order (ie. sign and exponent bytes come first).
+     little-endian order (ie. sign byte comes last).
    * `Ty`x`N` is an array of `N` elements of type `Ty`. Unless otherwise noted,
      there is no padding between elements (ie. the stride is equal to the
      total size of `Ty`).
@@ -190,7 +190,7 @@ Additional notes:
 `meta.db` Hierarchical Identifier Names section
 -----------------------------------------------
 > In future versions of HPCToolkit new functionality may be added that requires
-> new values for the the `kind` field of a [Hierarchical Identifier Tuple](#hierarchical-identifier-tuple).
+> new values for the the `kind` field of a [Hierarchical Identifier Tuple][HIT].
 > The Hierarchical Identifier Names section provides human-readable names for
 > all possible values for forward compatibility.
 
@@ -199,11 +199,13 @@ The Hierarchical Identifier Names section starts with the following header:
  Hex | Type | Name         | Description
  ---:| ---- | ------------ | --------------------------------------------------
 `00:`|char\*xN*(8)|`pNames`| Pointer to an array of `nKinds` human-readable names for Id. Names
-`08:`|u16|`nKinds`         | Number of names listed in this section
-`0a:`|| **END**
+`08:`|u8|`nKinds`          | Number of names listed in this section
+`09:`|| **END**
 
 `(*pNames)[kind]` is the human-readable name for the Identifier kind `kind`,
-where `kind` is part of a [Hierarchical Identifier Tuple](#hierarchical-identifier-tuple).
+where `kind` is part of a [Hierarchical Identifier Tuple][HIT].
+
+[HIT]: #hierarchical-identifier-tuple
 
 Additional notes:
  - The strings pointed to by the elements of `names` are fully contained within
@@ -270,6 +272,17 @@ The Performance Metrics section starts with the following header:
 |    |
 `10:`|| **END**
 
+> The propagation scope `scope` may be any string, however to aid writing and
+> maintaining metric taxonomies (see METRICS.yaml) the names rarely change
+> meanings. Each scope indicates the children that are included in the sum for
+> propagating metric values, the following scopes are in active use:
+>  - "point": No children are included in the sum -- no propagation happens.
+>  - "function": Only children not related by a caller-calle relationship are
+>    included in the sum -- propagation only happens within a function call.
+>    Values for this scope are sometimes called "exclusive cost."
+>  - "execution": All children are included in the sum. Values for this scope
+>    are often called "inclusive cost."
+
 The combination function `combine` is an enumeration with the following possible
 values (the name after `/` is the matching name for `inputs:combine` in
 METRICS.yaml):
@@ -284,9 +297,9 @@ Additional notes:
    within the Performance Metrics section, including the terminating NUL.
  - The format and interpretation of `formula` matches the `inputs:formula` key
    in METRICS.yaml, see there for details.
- - `propMetricId` is the metric identifier used in profile.db and cct.db for
+ - `propMetricId` is the metric identifier used in `profile.db` and `cct.db` for
    propagated metric values for the given `name` and `scope`.
- - `statMetricId` is the metric identifier used in the profile.db summary
+ - `statMetricId` is the metric identifier used in the `profile.db` summary
    profile for summary statistic values for the given `name`, `scope`, `formula`
    and `combine`.
  - The stride of `*pMetrics`, `*pScopes` and `pSummaries` is `szMetric`,
@@ -432,9 +445,28 @@ Additional notes:
 
 `meta.db` Context Tree section
 -------------------------------
-> The Context Tree section lists the calling contexts observed during the
-> application's execution, expanded with additional source-level context to
-> aid manual performance analysis.
+> The Context Tree section lists the source-level calling contexts in which
+> performance data was gathered during application runtime. Each context
+> ({Ctx} below) represents a source-level (lexical) context, and these can be
+> nested to create paths in the tree:
+>
+>     function foo()
+>       loop at foo.c:12
+>         line foo.c:15
+>           instruction libfoo.so@0x10123
+>
+> The relation between contexts may be enclosing lexical context (as above), or
+> can be marked as a call of various types (see `relation` below):
+>
+>     instruction libfoo.so@0x10123
+>       [normal call to] function bar()
+>         line bar.c:57
+>           [inlined call to] function baz()
+>             instruction libbar.so@0x25120
+>
+> Although some patterns in the context tree are more common than others, the
+> format is very flexible and will allow almost any nested structure. It is up
+> to the reader to interpret the context tree as appropriate.
 
 The Context Tree section starts with the following header:
 
@@ -452,7 +484,8 @@ The Context Tree section starts with the following header:
 `08:`|{Ctx}xN*(8)|`pChildren`| Pointer to the array of child contexts
 `10:`|i32|`ctxId`            | Unique identifier for this context
 `14:`|{Flags}|`flags`        | See below
-`16:`|u8|`lexicalType`       | Type of lexical context represented here
+`15:`|u8|`relation`          | Relation this context has with its parent
+`16:`|u8|`lexicalType`       | Type of lexical context represented
 `17:`|u8|`nFlexWords`        | Size of `flex`, in i8x8 "words" (bytes / 8)
 `18:`|i8x8xN|`flex`          | Flexible data region, see below
 ` *:`|| **END**
@@ -468,6 +501,31 @@ The packing order is indicated by the index on `flex`, ie. `flex[1]` is the
 sub-field next in the packing order after `flex[0]`. This order still holds
 even if not all fields are present for any particular instance.
 
+{Flags} above refers to an i8 bitfield with the following sub-fields (bit 0 is
+least significant):
+ - Bit 0: `hasFunction`. If 1, the following sub-fields of `flex` are present:
+   + `flex[0]:` [FS]* `function`: Function associated with this context
+ - Bit 1: `hasSrcLoc`. If 1, the following sub-fields of `flex` are present:
+   + `flex[1]:` [SFS]* `file`: Source file associated with this context
+   + `flex[2]:` u32 `line`: Associated source line in `file`
+ - Bit 2: `hasPoint`. If 1, the following sub-fields of `flex` are present:
+   + `flex[3]:` [LMS]* `module`: Load module associated with this context
+   + `flex[4]:` u64 `offset`: Assocated byte offset in `module`
+ - Bits 3-7: Reserved for future use.
+
+[FS]: #function-specification
+[SFS]: #source-file-specification
+[LMS]: #load-module-specification
+
+`relation` is an enumeration with the following values:
+ - `0`: This context's parent is an enclosing lexical context, eg. source line
+   within a function. Specifically, no call occurred.
+ - `1`: This context's parent used a typical function call to reach this
+   context. The parent context is the source-level location of the call.
+ - `2`: This context's parent used an inlined function call (ie. the call was
+   inlined by the compiler). The parent context is the source-level location of
+   the original call.
+
 The lexical type `lexicalType` is an enumeration with the following values:
  - `0`: Function-like construct. If `hasFunction` is 1, `function` indicates the
    function represented by this context. Otherwise the function for this context
@@ -478,30 +536,6 @@ The lexical type `lexicalType` is an enumeration with the following values:
    represented by this context.
  - `3`: Single instruction. `module` and `offset` indicate the first byte of the
    instruction represented by this context.
-
-{Flags} above refers to an i16 bitfield with the following sub-fields (bit 0 is
-least significant):
- - Bit 0: `isCallee`. If 1, this context was called by its parent, and the
-   following sub-field of `flex` is present:
-   + `flex[0]:` i8x8xN `calleeFlex`: Flexible data sub-region dedicated to
-     describing the call that took place to reach this context. Size in words is
-     `nCalleeFlexWords`, see the [Call properties](#call-properties) below.
- - Bit 1: `hasFunction`. If 1, the following sub-fields of `flex` are present:
-   + `flex[1]:` [FS]* `function`: Function associated with this context
- - Bit 2: `hasSrcLoc`. If 1, the following sub-fields of `flex` are present:
-   + `flex[2]:` [SFS]* `file`: Source file associated with this context
-   + `flex[3]:` u32 `line`: Associated source line in `file`
- - Bit 3: `hasPoint`. If 1, the following sub-fields of `flex` are present:
-   + `flex[4]:` [LMS]* `module`: Load module associated with this context
-   + `flex[5]:` u64 `offset`: Assocated byte-offset in `module`
- - Bit 4: `isCallSrcLine`. If 1, `hasSrcLoc == 1` and `file:line` may be used
-   in place of `callFile:callLine` in children if the latter is not present.
-   See below.
- - Bits 5-15: Reserved for future use.
-
-[FS]: #function-specification
-[SFS]: #source-file-specification
-[LMS]: #load-module-specification
 
 Additional notes:
  - The arrays pointed to by `pRoots` and `pChildren` are completely within the
@@ -698,32 +732,46 @@ each of the following structure:
 
  Hex | Type | Name    | Description
  ---:| ---- | ------- | -------------------------------------------------------
-`00:`|{Bits}|`bits`   | Interpretation of this identifier, see below
+`00:`|u8|`kind`       | One of the values listed in the [`meta.db` Identifier Names section][INsec].
 |    |
-`04:`|u32|`logicalId` | Logical identifier value
-`08:`|u64|`physicalId`| Physical identifier value, eg. hostid or PCI bus index
+`02:`|{Flags}|`flags` | See below.
+`04:`|u32|`logicalId` | Logical identifier value, may be arbitrary but dense towards 0.
+`08:`|u64|`physicalId`| Physical identifier value, eg. hostid or PCI bus index.
 `10:`|| **END**
 
-{Bits} above is an i16 bitfield with the following sub-fields (bit 0 is least
-significant):
- - Bits 0-13: `kind`. One of the values listed in the
-   [`meta.db` Identifier Names section](#metadb-hierarchical-identifier-names-section).
-   Each `kind` refers to a particular hardware or virtual construct of interest
-   to application developers, eg. compute node or MPI rank.
- - Bits 14-15: `interp`. Interpretation of the identifier fields `physicalId`
-   and `logicalId`. Enumeration with the following possible values:
-   * `0`: Both `physicalId` and `logicalId` are valid.
-   * `1`,`2`: For internal use only.
-   * `3`: Only `logicalId` is valid.
+[INsec]: #metadb-hierarchical-identifier-names-section
+
+{Flags} above refers to an i16 bitfield with the following sub-fields (bit 0 is
+least significant):
+ - Bit 0: `isPhysical`. If 1, the `kind` represents a physical (hardware or VM)
+   construct for which `physicalId` is the identifier (and `logicalId` is
+   arbitrary but distinct). If 0, `kind` represents a logical (software-only)
+   construct (and `physicalId` is `logicalId` zero-extended to 64 bits).
+ - Bits 1-15: Reserved for future use.
+
+> The name associated with the `kind` in the [`meta.db`][INsec] indicates the
+> meaning of `logicalId` (if `isPhysical == 0`) and/or `physicalId` (if
+> `isPhysical == 1`). The following names are in current use with the given
+> meanings:
+>  - "NODE": Compute node, `physicalId` indicates the hostid of the node.
+>  - "RANK": Rank of the process (from eg. MPI), `logicalId` indicates the rank.
+>  - "CORE": Core the application thread was bound to, `physicalId` indicates
+>    the index of the first hardware thread as listed in /proc/cpuinfo.
+>  - "THREAD": Application CPU thread, `logicalId` indicates the index.
+>  - "GPUCONTEXT": Context used to access a GPU, `logicalId` indicates the index
+>    as given by the underlying programming model (eg. CUDA context index).
+>  - "GPUSTREAM": Stream/queue used to push work to a GPU, `logicalId` indicates
+>    the index as given by the programming model (eg. CUDA stream index).
+>
+> These names/meanings are not stable and may change without a version bump, it
+> is highly recommended that readers refrain from any special-case handling of
+> particular `kind` values where possible.
 
 Additional notes:
  - While `physicalId` (when valid) lists a physical identification for an
    application thread, the contained value is often too obtuse for generating
    human-readable output listing many identifiers. `logicalId` is a suitable
    replacement in these cases, as these values are always dense towards 0.
- - The meaning of `physicalId` is based completely on the `kind`. The following
-   named `kind`s have well-defined meanings for `physicalId`:
-   * `NODE`: hostid of the compute node, zero-extended to 64 bits
 
 
 * * *
