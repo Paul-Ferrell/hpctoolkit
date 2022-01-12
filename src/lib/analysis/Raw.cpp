@@ -80,7 +80,7 @@ using std::string;
 #include <lib/prof-lean/hpcrun-fmt.h>
 #include <lib/prof-lean/id-tuple.h>
 #include <lib/prof-lean/tracedb.h>
-#include <lib/prof-lean/metadb.h>
+#include <lib/prof-lean/formats/metadb.h>
 #include <lib/prof/pms-format.h>
 #include <lib/prof/cms-format.h>
 
@@ -398,75 +398,52 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
       DIAG_Throw("error opening meta.db file '" << filenm << "'");
     }
 
-    metadb_hdr_t hdr;
-    if(metadb_hdr_fread(&hdr, fs) != HPCFMT_OK)
-      DIAG_Throw("error reading meta.db header");
-    if(metadb_hdr_fprint(&hdr, stdout, "") != HPCFMT_OK)
-      DIAG_Throw("error printing meta.db header");
-
-    metadb_general_t gen;
-    if(fseeko(fs, hdr.general_sec_ptr, SEEK_SET) != 0)
-      DIAG_Throw("error seeking to meta.db general properties section");
-    if(metadb_general_fread(&gen, fs) != HPCFMT_OK)
-      DIAG_Throw("error reading meta.db general properties section");
-    if(metadb_general_fprint(&gen, stdout, "") != HPCFMT_OK) {
-      metadb_general_free(&gen, nullptr);
-      DIAG_Throw("error printing meta.db general properties");
-    }
-    metadb_general_free(&gen, nullptr);
-
-    if(fseeko(fs, hdr.idtable_sec_ptr, SEEK_SET) != 0)
-      DIAG_Throw("error seeking to meta.db idtable section");
-    uint16_t num_kinds;
-    if(hpcfmt_int2_fread(&num_kinds, fs) != HPCFMT_OK)
-      DIAG_Throw("error reading meta.db idtable section");
-    printf("[identifier table: (num_kinds: %" PRIu16 "\n", num_kinds);
-    for(size_t i = 0; i < num_kinds; i++) {
-      char* name;
-      if(hpcfmt_nullstr_fread(&name, fs) != HPCFMT_OK)
-        DIAG_Throw("error reading meta.db idtable section");
-      printf("  (id: %zu) (name: %s)\n", i, name);
-      free(name);
-    }
-    printf("]\n");
-
-    if(fseeko(fs, hdr.metric_sec_ptr, SEEK_SET) != 0)
-      DIAG_Throw("error seeking to meta.db metric section");
-    uint32_t num_metrics;
-    if(hpcfmt_int4_fread(&num_metrics, fs) != HPCFMT_OK)
-      DIAG_Throw("error reading meta.db metric section");
-    printf("[performance metrics: (num_metrics: %" PRIu32 "\n", num_metrics);
-    for(size_t i = 0; i < num_metrics; i++) {
-      metadb_metric_t met;
-      if(metadb_metric_fread(&met, fs) != HPCFMT_OK)
-        DIAG_Throw("error reading meta.db metric section");
-      if(metadb_metric_fprint(&met, stdout, "  ") != HPCFMT_OK)
-        DIAG_Throw("error printing meta.db metric section");
-      printf("  [scopes for previous metric %s:\n", met.name);
-      metadb_metric_free(&met, nullptr);
-
-      for(size_t j = 0; j < met.num_scopes; j++) {
-        metadb_metric_scope_t scope;
-        if(metadb_metric_scope_fread(&scope, fs) != HPCFMT_OK)
-          DIAG_Throw("error reading meta.db metric section");
-        if(metadb_metric_scope_fprint(&scope, stdout, "    ") != HPCFMT_OK)
-          DIAG_Throw("error printing meta.db metric section");
-        printf("    [summaries for previous scope %s:\n", scope.scope);
-        metadb_metric_scope_free(&scope, nullptr);
-
-        for(size_t k = 0; k < scope.num_summaries; k++) {
-          metadb_metric_summary_t sum;
-          if(metadb_metric_summary_fread(&sum, fs) != HPCFMT_OK)
-            DIAG_Throw("error reading meta.db metric section");
-          if(metadb_metric_summary_fprint(&sum, stdout, "      ") != HPCFMT_OK)
-            DIAG_Throw("error printing meta.db metric section");
-          metadb_metric_summary_free(&sum, nullptr);
-        }
-        printf("    ]\n");
+    {
+      char buf[16];
+      if(fread(buf, 1, sizeof buf, fs) < sizeof buf)
+        DIAG_Throw("eof/error reading meta.db format header");
+      uint8_t minor;
+      auto ver = fmt_metadb_check(buf, &minor);
+      switch(ver) {
+      case fmt_version_invalid:
+        DIAG_Throw("Not a meta.db file");
+      case fmt_version_backward:
+        DIAG_Throw("Incompatible meta.db version (too old)");
+      case fmt_version_major:
+        DIAG_Throw("Incompatible meta.db version (major version mismatch)");
+      case fmt_version_forward:
+        DIAG_Msg(0, "WARNING: Minor version mismatch (" << (unsigned int)minor
+          << " > " << FMT_METADB_MinorVersion << "), some fields may be missing");
+        break;
+      default:
+        break;
       }
-      printf("  ]\n");
+      if(ver < 0)
+        DIAG_Throw("error parsing meta.db format header");
+      rewind(fs);
+
+      std::cout << "meta.db version " << FMT_DB_MajorVersion << "."
+                << (unsigned int)minor << "\n";
     }
-    printf("]\n");
+
+    fmt_metadb_fHdr_t fhdr;
+    {
+      char buf[FMT_METADB_SZ_FHdr];
+      if(fread(buf, 1, sizeof buf, fs) < sizeof buf)
+        DIAG_Throw("eof reading meta.db header");
+      fmt_metadb_fHdr_read(&fhdr, buf);
+      std::cout << std::hex <<
+        "[meta.db file header:\n"
+        "  (szGeneral: 0x" << fhdr.szGeneral << ") (pGeneral: 0x" << fhdr.pGeneral <<  ")\n"
+        "  (szIdNames: 0x" << fhdr.szIdNames << ") (pIdNames: 0x" << fhdr.pIdNames <<  ")\n"
+        "  (szMetrics: 0x" << fhdr.szMetrics << ") (pMetrics: 0x" << fhdr.pMetrics <<  ")\n"
+        "  (szContext: 0x" << fhdr.szContext << ") (pContext: 0x" << fhdr.pContext <<  ")\n"
+        "  (szStrings: 0x" << fhdr.szStrings << ") (pStrings: 0x" << fhdr.pStrings <<  ")\n"
+        "  (szModules: 0x" << fhdr.szModules << ") (pModules: 0x" << fhdr.pModules <<  ")\n"
+        "  (szFiles: 0x" << fhdr.szFiles << ") (pFiles: 0x" << fhdr.pFiles <<  ")\n"
+        "  (szFunctions: 0x" << fhdr.szFunctions << ") (pFunctions: 0x" << fhdr.pFunctions <<  ")\n"
+        "]\n";
+    }
   }
   catch(...) {
     DIAG_EMsg("While reading '" << filenm << "'...");

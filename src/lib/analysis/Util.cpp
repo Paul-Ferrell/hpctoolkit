@@ -88,7 +88,7 @@ using std::string;
 #include <lib/prof-lean/hpcrun-fmt.h>
 #include <lib/prof-lean/hpcrunflat-fmt.h>
 #include <lib/prof-lean/tracedb.h>
-#include <lib/prof-lean/metadb.h>
+#include <lib/prof-lean/formats/metadb.h>
 
 #include <lib/support/PathFindMgr.hpp>
 #include <lib/support/PathReplacementMgr.hpp>
@@ -174,7 +174,7 @@ getProfileType(const std::string& filenm)
     ty = ProfType_SparseDBcct;
   }else if(strncmp(buf, HPCTRACEDB_FMT_Magic, HPCTRACEDB_FMT_MagicLen) == 0){ 
     ty = ProfType_TraceDB;
-  }else if(strncmp(buf, HPCMETADB_FMT_Magic, HPCMETADB_FMT_MagicLen) == 0){
+  }else if(fmt_metadb_check(buf, nullptr) != fmt_version_invalid){
     ty = ProfType_MetaDB;
   }
 

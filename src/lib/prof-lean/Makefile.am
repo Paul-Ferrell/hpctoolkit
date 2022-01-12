@@ -113,7 +113,10 @@ MYSOURCES = \
 	\
 	id-tuple.h id-tuple.c \
 	tracedb.h tracedb.c \
-	metadb.h metadb.c
+	\
+	formats/common.h \
+	formats/primitive.h formats/primitive.c \
+	formats/metadb.h formats/metadb.c
 
 MYCFLAGS = @HOST_CFLAGS@ $(HPC_IFLAGS) $(MBEDTLS_IFLAGS)  -I$(LIBELF_INC)
 

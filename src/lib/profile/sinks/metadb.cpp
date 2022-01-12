@@ -48,9 +48,9 @@
 
 #include "../util/log.hpp"
 
-#include "lib/prof-lean/metadb.h"
+#include "lib/prof-lean/formats/metadb.h"
 
-#include <cstdio>
+#include <fstream>
 #include <stack>
 
 using namespace hpctoolkit;
@@ -120,15 +120,12 @@ std::string MetaDB::accumulateFormulaString(const Expression& e) {
   return ss.str();
 }
 
-void MetaDB::write() {
-  auto metadb = dir / "meta.db";
-  FILE* of = fopen(metadb.c_str(), "wbm");
-  if(!of) util::log::fatal{} << "Failed to open " << metadb.string() << " for writing!";
+void MetaDB::write() try {
+  stdshim::filesystem::create_directory(dir);
+  std::ofstream f(dir / "meta.db", std::ios_base::out
+      | std::ios_base::trunc | std::ios_base::binary);
 
-  // Skip over the header, we'll write it at the end.
-  metadb_hdr_t hdr = {
-    HPCMETADB_FMT_VersionMajor, HPCMETADB_FMT_VersionMinor,
-    HPCMETADB_FMT_NumSec,
+  fmt_metadb_fHdr_t filehdr = {
     0, 0,
     1, 1,
     2, 2,
@@ -138,89 +135,13 @@ void MetaDB::write() {
     6, 6,
     7, 7
   };
-  fseeko(of, align(HPCMETADB_FMT_HeaderLen, 16), SEEK_SET);
 
-  {  // General Properties section
-    hdr.general_sec_ptr = ftello(of);
-    metadb_general_t gen;
-    if(auto n = src.attributes().name())
-      gen.title = const_cast<char*>(n->c_str());
-    else gen.title = const_cast<char*>("<untitled>");
-    gen.description = const_cast<char*>("TODO database description");
-    if(metadb_general_fwrite(&gen, of) != HPCFMT_OK)
-      util::log::fatal{} << "Error while writing " << metadb.string() << " general properties!";
-    hdr.general_sec_size = ftello(of) - hdr.general_sec_ptr;
+  { // File header
+    char buf[FMT_METADB_SZ_FHdr];
+    fmt_metadb_fHdr_write(buf, &filehdr);
+    f.seekp(0, std::ios_base::beg);
+    f.write(buf, sizeof buf);
   }
-
-  {  // Hierarchical Identifier Table section
-    const auto& names_map = src.attributes().idtupleNames();
-    std::vector<util::optional_ref<const std::string>> names;
-    names.resize(names_map.size(), std::nullopt);
-    for(const auto& kv: names_map) {
-      names.resize(kv.first+1, std::nullopt);
-      names[kv.first] = kv.second;
-    }
-
-    fseeko(of, hdr.idtable_sec_ptr = align(ftello(of), 16), SEEK_SET);
-    if(hpcfmt_int2_fwrite(names.size(), of) != HPCFMT_OK)
-      util::log::fatal{} << "Error while writing " << metadb.string() << " id table!";
-    for(const auto& n: names) {
-      if(hpcfmt_nullstr_fwrite(n ? n->c_str() : "", of) != HPCFMT_OK)
-        util::log::fatal{} << "Error while writing " << metadb.string() << " id table!";
-    }
-    hdr.idtable_sec_size = ftello(of) - hdr.idtable_sec_ptr;
-  }
-
-  {  // Performance Metric section
-    fseeko(of, hdr.metric_sec_ptr = align(ftello(of), 16), SEEK_SET);
-    if(hpcfmt_int4_fwrite(src.metrics().size(), of) != HPCFMT_OK)
-      util::log::fatal{} << "Error while writing " << metadb.string() << " metrics!";
-    for(const Metric& m: src.metrics().citerate()) {
-      const auto& id = m.userdata[src.identifier()];
-
-      metadb_metric_t met = {
-        (uint16_t)m.scopes().count(), const_cast<char*>(m.name().c_str())
-      };
-      if(metadb_metric_fwrite(&met, of) != HPCFMT_OK)
-        util::log::fatal{} << "Error while writing " << metadb.string() << " metrics!";
-
-      for(MetricScope ms: m.scopes()) {
-        auto msname = ({
-          std::ostringstream ss;
-          ss << ms;
-          ss.str();
-        });
-
-        metadb_metric_scope_t scope = {
-          (uint16_t)id.getFor(ms), (uint16_t)m.partials().size(),
-          const_cast<char*>(msname.c_str())
-        };
-        if(metadb_metric_scope_fwrite(&scope, of) != HPCFMT_OK)
-          util::log::fatal{} << "Error while writing " << metadb.string() << " metrics!";
-
-        for(const auto& part: m.partials()) {
-          auto form = accumulateFormulaString(part.accumulate());
-          metadb_metric_summary_t sum = {
-            (uint16_t)id.getFor(part, ms), 0xFF, const_cast<char*>(form.c_str())
-          };
-          switch(part.combinator()) {
-          case Statistic::combination_t::sum:
-            sum.combine = HPCMETADB_FMT_COMBINE_SUM; break;
-          case Statistic::combination_t::min:
-            sum.combine = HPCMETADB_FMT_COMBINE_MIN; break;
-          case Statistic::combination_t::max:
-            sum.combine = HPCMETADB_FMT_COMBINE_MAX; break;
-          }
-          if(metadb_metric_summary_fwrite(&sum, of) != HPCFMT_OK)
-            util::log::fatal{} << "Error while writing " << metadb.string() << " metrics!";
-        }
-      }
-    }
-    hdr.metric_sec_size = ftello(of) - hdr.metric_sec_ptr;
-  }
-
-  // Rewind and write the header, then close up
-  rewind(of);
-  metadb_hdr_fwrite(&hdr, of);
-  fclose(of);
+} catch(const std::exception& e) {
+  util::log::fatal{} << "Error while writing meta.db: " << e.what();
 }
