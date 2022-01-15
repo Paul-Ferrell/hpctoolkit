@@ -81,6 +81,7 @@ using std::string;
 #include <lib/prof-lean/id-tuple.h>
 #include <lib/prof-lean/tracedb.h>
 #include <lib/prof-lean/formats/metadb.h>
+#include <lib/prof-lean/formats/primitive.h>
 #include <lib/prof/pms-format.h>
 #include <lib/prof/cms-format.h>
 
@@ -420,17 +421,17 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
       }
       if(ver < 0)
         DIAG_Throw("error parsing meta.db format header");
-      rewind(fs);
 
       std::cout << "meta.db version " << FMT_DB_MajorVersion << "."
                 << (unsigned int)minor << "\n";
     }
 
     fmt_metadb_fHdr_t fhdr;
-    {
+    { // meta.db file header
+      rewind(fs);
       char buf[FMT_METADB_SZ_FHdr];
       if(fread(buf, 1, sizeof buf, fs) < sizeof buf)
-        DIAG_Throw("eof reading meta.db header");
+        DIAG_Throw("eof reading meta.db file header");
       fmt_metadb_fHdr_read(&fhdr, buf);
       std::cout << std::hex <<
         "[meta.db file header:\n"
@@ -442,7 +443,47 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
         "  (szModules: 0x" << fhdr.szModules << ") (pModules: 0x" << fhdr.pModules <<  ")\n"
         "  (szFiles: 0x" << fhdr.szFiles << ") (pFiles: 0x" << fhdr.pFiles <<  ")\n"
         "  (szFunctions: 0x" << fhdr.szFunctions << ") (pFunctions: 0x" << fhdr.pFunctions <<  ")\n"
-        "]\n";
+        "]\n" << std::dec;
+    }
+
+    { // General Properties section
+      if(fseeko(fs, fhdr.pGeneral, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db General Properties section");
+      std::vector<char> buf(fhdr.szGeneral);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db General Properties section");
+
+      fmt_metadb_generalSHdr_t gphdr;
+      fmt_metadb_generalSHdr_read(&gphdr, buf.data());
+      std::cout << std::hex <<
+        "[general properties:\n"
+        "  (pTitle: 0x" << gphdr.pTitle << " = \""
+          << &buf.at(gphdr.pTitle - fhdr.pGeneral) << "\")\n"
+        "  (pDescription: 0x" << gphdr.pDescription << " = \"\"\"\n"
+          << &buf.at(gphdr.pDescription - fhdr.pGeneral) << "\n"
+        "\"\"\")\n"
+        "]\n" << std::dec;
+    }
+
+    { // Identifier Names section
+      if(fseeko(fs, fhdr.pIdNames, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Identifier Names section");
+      std::vector<char> buf(fhdr.szIdNames);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db Identifier Names section");
+
+      fmt_metadb_idNamesSHdr_t idhdr;
+      fmt_metadb_idNamesSHdr_read(&idhdr, buf.data());
+      std::cout << std::hex <<
+        "[hierarchical identifier names:\n"
+        "  (ppNames: 0x" << idhdr.ppNames << ") (nKinds: "
+            << std::dec << (unsigned int)idhdr.nKinds << ")\n" << std::hex;
+      for(unsigned int i = 0; i < idhdr.nKinds; i++) {
+        auto pName = fmt_u64_read(&buf.at(idhdr.ppNames + 8*i - fhdr.pIdNames));
+        std::cout << "    (ppNames[" << i << "]: 0x" << pName << " = \""
+                  << &buf.at(pName - fhdr.pIdNames) << "\")\n";
+      }
+      std::cout << "]\n" << std::dec;
     }
   }
   catch(...) {

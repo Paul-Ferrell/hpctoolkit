@@ -49,6 +49,7 @@
 #include "../util/log.hpp"
 
 #include "lib/prof-lean/formats/metadb.h"
+#include "lib/prof-lean/formats/primitive.h"
 
 #include <fstream>
 #include <stack>
@@ -124,6 +125,7 @@ void MetaDB::write() try {
   stdshim::filesystem::create_directory(dir);
   std::ofstream f(dir / "meta.db", std::ios_base::out
       | std::ios_base::trunc | std::ios_base::binary);
+  f.exceptions(std::ios_base::badbit | std::ios_base::failbit);
 
   fmt_metadb_fHdr_t filehdr = {
     0, 0,
@@ -135,6 +137,76 @@ void MetaDB::write() try {
     6, 6,
     7, 7
   };
+  f.seekp(FMT_METADB_SZ_FHdr, std::ios_base::beg);
+  uint64_t cursor = FMT_METADB_SZ_FHdr;
+
+  { // General Properties section
+    f.seekp(filehdr.pGeneral = align(cursor, 8), std::ios_base::beg);
+
+    const std::string defaultTitle = "<unnamed>";
+    const auto& title = src.attributes().name().value_or(defaultTitle);
+    const std::string description = "TODO database description";
+
+    // Section header
+    fmt_metadb_generalSHdr_t gphdr;
+    gphdr.pTitle = filehdr.pGeneral + FMT_METADB_SZ_GeneralSHdr;
+    gphdr.pDescription = gphdr.pTitle + title.size() + 1;
+    cursor = gphdr.pDescription + description.size() + 1;
+    filehdr.szGeneral = cursor - filehdr.pGeneral;
+    char buf[FMT_METADB_SZ_GeneralSHdr];
+    fmt_metadb_generalSHdr_write(buf, &gphdr);
+    f.write(buf, sizeof buf);
+
+    // *pTitle string
+    f.write(title.data(), title.size());
+    f.put('\0');
+
+    // *pDescription string
+    f.write(description.data(), description.size());
+    f.put('\0');
+  }
+
+  { // Identifier Names section
+    f.seekp(filehdr.pIdNames = cursor = align(cursor, 8), std::ios_base::beg);
+
+    std::deque<util::optional_ref<const std::string>>
+        names(src.attributes().idtupleNames().size());
+    uint64_t nameSize = 0;
+    for(const auto& kv: src.attributes().idtupleNames()) {
+      if(names.size() <= kv.first) names.resize(kv.first+1);
+      names[kv.first] = kv.second;
+      nameSize += kv.second.size() + 1; // for NUL
+    }
+
+    // Section header
+    fmt_metadb_idNamesSHdr_t idhdr;
+    idhdr.ppNames = align(filehdr.pIdNames + FMT_METADB_SZ_IdNamesSHdr, 8);
+    idhdr.nKinds = names.size();
+    char buf[FMT_METADB_SZ_IdNamesSHdr];
+    fmt_metadb_idNamesSHdr_write(buf, &idhdr);
+    f.write(buf, sizeof buf);
+
+    // *ppNames array
+    f.seekp(cursor = idhdr.ppNames, std::ios_base::beg);
+    auto firstName = cursor += 8 * idhdr.nKinds;
+    cursor += 1;  // "First" name is an empty string, for std::nullopt. Probably never used.
+    for(const auto& n: names) {
+      char buf[8];
+      fmt_u64_write(buf, n ? cursor : firstName);
+      f.write(buf, sizeof buf);
+      if(n) cursor += n->size() + 1;
+    }
+    f.put('\0');  // "First" empty name
+    filehdr.szIdNames = cursor - filehdr.pIdNames;
+
+    // **ppNames strings
+    for(const auto& n: names) {
+      if(n) {
+        f.write(n->data(), n->size());
+        f.put('\0');
+      }
+    }
+  }
 
   { // File header
     char buf[FMT_METADB_SZ_FHdr];
