@@ -315,7 +315,7 @@ enum {
 
 // Returns false if the read context spec is invalid (nFlexWords is too small)
 bool fmt_metadb_context_read(fmt_metadb_context_t*, const char*);
-// Returns the total size of the written context spec
+// Returns the total size of the written context spec, in bytes
 size_t fmt_metadb_context_write(char*, const fmt_metadb_context_t*);
 
 #if defined(__cplusplus)

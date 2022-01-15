@@ -146,9 +146,9 @@ void fmt_metadb_metricsSHdr_read(fmt_metadb_metricsSHdr_t* mhdr, const char d[FM
 void fmt_metadb_metricsSHdr_write(char d[FMT_METADB_SZ_MetricsSHdr], const fmt_metadb_metricsSHdr_t* mhdr) {
   fmt_u64_write(d+0x00, mhdr->pMetrics);
   fmt_u64_write(d+0x08, mhdr->nMetrics);
-  d[0x0c] = mhdr->szMetric;
-  d[0x0d] = mhdr->szScope;
-  d[0x0e] = mhdr->szSummary;
+  d[0x0c] = FMT_METADB_SZ_MetricDesc;
+  d[0x0d] = FMT_METADB_SZ_MetricScope;
+  d[0x0e] = FMT_METADB_SZ_MetricSummary;
 }
 
 void fmt_metadb_metricDesc_read(fmt_metadb_metricDesc_t* md, const char d[FMT_METADB_SZ_MetricDesc]) {
@@ -194,7 +194,7 @@ void fmt_metadb_modulesSHdr_read(fmt_metadb_modulesSHdr_t* mhdr, const char d[FM
 void fmt_metadb_modulesSHdr_write(char d[FMT_METADB_SZ_ModulesSHdr], const fmt_metadb_modulesSHdr_t* mhdr) {
   fmt_u64_write(d+0x00, mhdr->pModules);
   fmt_u32_write(d+0x08, mhdr->nModules);
-  fmt_u16_write(d+0x0c, mhdr->szModule);
+  fmt_u16_write(d+0x0c, FMT_METADB_SZ_ModuleSpec);
 }
 
 void fmt_metadb_moduleSpec_read(fmt_metadb_moduleSpec_t* lms, const char d[FMT_METADB_SZ_ModuleSpec]) {
@@ -212,7 +212,7 @@ void fmt_metadb_filesSHdr_read(fmt_metadb_filesSHdr_t* fhdr, const char d[FMT_ME
 void fmt_metadb_filesSHdr_write(char d[FMT_METADB_SZ_FilesSHdr], const fmt_metadb_filesSHdr_t* fhdr) {
   fmt_u64_write(d+0x00, fhdr->pFiles);
   fmt_u32_write(d+0x08, fhdr->nFiles);
-  fmt_u16_write(d+0x0c, fhdr->szFile);
+  fmt_u16_write(d+0x0c, FMT_METADB_SZ_FileSpec);
 }
 
 void fmt_metadb_fileSpec_read(fmt_metadb_fileSpec_t* sfs, const char d[FMT_METADB_SZ_FileSpec]) {
@@ -236,7 +236,7 @@ void fmt_metadb_functionsSHdr_read(fmt_metadb_functionsSHdr_t* fhdr, const char 
 void fmt_metadb_functionsSHdr_write(char d[FMT_METADB_SZ_FunctionsSHdr], const fmt_metadb_functionsSHdr_t* fhdr) {
   fmt_u64_write(d+0x00, fhdr->pFunctions);
   fmt_u32_write(d+0x08, fhdr->nFunctions);
-  fmt_u16_write(d+0x0c, fhdr->szFunction);
+  fmt_u16_write(d+0x0c, FMT_METADB_SZ_FunctionSpec);
 }
 
 void fmt_metadb_functionSpec_read(fmt_metadb_functionSpec_t* fs, const char d[FMT_METADB_SZ_FunctionSpec]) {
