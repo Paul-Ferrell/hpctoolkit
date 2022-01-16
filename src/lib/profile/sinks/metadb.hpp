@@ -81,6 +81,18 @@ public:
 private:
   stdshim::filesystem::path dir;
   bool copySources;
+
+  struct MetricRef {
+    MetricRef(const Metric&);
+
+    template<class F>
+    void compose(char*, uint64_t, const F&) const;
+    size_t scopesSize() const;
+    template<class F>
+    std::vector<char> composeScopes(uint64_t, const Metric::Identifier&, const F&) const;
+
+    const Metric& m;
+  };
 };
 
 }  // namespace hpctoolkit::sinks

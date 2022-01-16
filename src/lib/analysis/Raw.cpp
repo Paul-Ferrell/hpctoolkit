@@ -485,6 +485,66 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
       }
       std::cout << "]\n" << std::dec;
     }
+
+    { // Performance Metrics section
+      if(fseeko(fs, fhdr.pMetrics, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Performance Metrics section");
+      std::vector<char> buf(fhdr.szMetrics);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db Performance Metrics section");
+
+      fmt_metadb_metricsSHdr_t mhdr;
+      fmt_metadb_metricsSHdr_read(&mhdr, buf.data());
+      std::cout << std::hex <<
+        "[performance metrics:\n"
+        "  (pMetrics: 0x" << mhdr.pMetrics << ") (nMetrics: "
+          << std::dec << mhdr.nMetrics << std::hex << ")\n"
+        "  (szMetric: 0x" << (unsigned int)mhdr.szMetric << " >= 0x" << FMT_METADB_SZ_MetricDesc << ")\n"
+        "  (szScope: 0x" << (unsigned int)mhdr.szScope << " >= 0x" << FMT_METADB_SZ_MetricScope << ")\n"
+        "  (szSummary: 0x" << (unsigned int)mhdr.szSummary << " >= 0x" << FMT_METADB_SZ_MetricSummary << ")\n";
+      for(uint32_t i = 0; i < mhdr.nMetrics; i++) {
+        fmt_metadb_metricDesc_t mdesc;
+        fmt_metadb_metricDesc_read(&mdesc, &buf.at(mhdr.pMetrics + mhdr.szMetric*i - fhdr.pMetrics));
+        std::cout <<
+          "  [pMetrics[" << std::dec << i << std::hex << "]:\n"
+          "    (pName: 0x" << mdesc.pName << " = &\""
+              << &buf.at(mdesc.pName - fhdr.pMetrics) << "\")\n"
+          "    (nScopes: " << std::dec << mdesc.nScopes << std::hex << ")"
+             " (pScopes: 0x" << mdesc.pScopes << ")\n";
+        for(unsigned int j = 0; j < mdesc.nScopes; j++) {
+          fmt_metadb_metricScope_t scope;
+          fmt_metadb_metricScope_read(&scope, &buf.at(mdesc.pScopes + mhdr.szScope*j - fhdr.pMetrics));
+          std::cout <<
+            "    [pScopes[" << std::dec << j << std::hex << "]:\n"
+            "      (pScope: 0x" << scope.pScope << " = &\""
+              << &buf.at(scope.pScope - fhdr.pMetrics) << "\")\n"
+            "      (nSummaries: " << std::dec << scope.nSummaries << ")\n"
+            "      (propMetricId: " << scope.propMetricId << ")\n"
+            "      (pSummaries: 0x" << std::hex << scope.pSummaries << ")\n";
+          for(unsigned int k = 0; k < scope.nSummaries; k++) {
+            fmt_metadb_metricSummary_t summary;
+            fmt_metadb_metricSummary_read(&summary, &buf.at(scope.pSummaries + mhdr.szSummary*k - fhdr.pMetrics));
+            std::cout <<
+              "      [pSummaries[" << std::dec << k << std::hex << "]:\n"
+              "        (pFormula: 0x" << summary.pFormula << " = &\""
+                << &buf.at(summary.pFormula - fhdr.pMetrics) << "\")\n"
+              "        (combine: " << std::dec << (unsigned int)summary.combine << " = ";
+            switch(summary.combine) {
+            case FMT_METADB_COMBINE_Sum: std::cout << "sum"; break;
+            case FMT_METADB_COMBINE_Min: std::cout << "min"; break;
+            case FMT_METADB_COMBINE_Max: std::cout << "max"; break;
+            default: std::cout << "???";
+            }
+            std::cout << ")\n"
+              "        (statMetricId: " << std::dec << summary.statMetricId << ")\n"
+              "      ]\n";
+          }
+          std::cout << "    ]\n";
+        }
+        std::cout << "  ]\n";
+      }
+      std::cout << "]\n";
+    }
   }
   catch(...) {
     DIAG_EMsg("While reading '" << filenm << "'...");

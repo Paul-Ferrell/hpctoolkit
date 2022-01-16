@@ -65,7 +65,7 @@ void MetaDB::notifyPipeline() noexcept {
 }
 
 template<class I>
-static I align(I v, uint8_t a) {
+static constexpr I align(I v, uint8_t a) {
   return (v + a - 1) / a * a;
 }
 
@@ -208,6 +208,83 @@ void MetaDB::write() try {
     }
   }
 
+  { // Performance Metrics section
+    f.seekp(filehdr.pMetrics = cursor = align(cursor, 8), std::ios_base::beg);
+
+    // section header
+    fmt_metadb_metricsSHdr_t shdr = {
+      .pMetrics = align(cursor + FMT_METADB_SZ_MetricsSHdr, 8),
+      .nMetrics = static_cast<uint32_t>(src.metrics().size()),
+    };
+    {
+      char buf[FMT_METADB_SZ_MetricsSHdr];
+      fmt_metadb_metricsSHdr_write(buf, &shdr);
+      f.write(buf, sizeof buf);
+    }
+
+    // The *pScopes arrays go after the *pPetrics array, keep a cursor there
+    uint64_t scopeCursor = align(shdr.pMetrics + shdr.nMetrics*FMT_METADB_SZ_MetricDesc, 8);
+
+    // The string table goes at the end of the section. Precalculate exactly
+    // where that will end up being.
+    uint64_t stringCursor = scopeCursor;
+    for(const Metric& m: src.metrics().citerate()) {
+      MetricRef mr = m;
+      stringCursor = align(stringCursor, 8) + mr.scopesSize();
+    }
+    auto stringsStart = stringCursor;
+
+    // Skip and write out the *pScopes arrays first, using a string table to
+    // save and merge shared strings for the table later.
+    // All the arrays are 8-aligned and 8-sized, so we don't need to align here.
+    f.seekp(scopeCursor, std::ios_base::beg);
+    std::unordered_map<util::reference_index<const Metric>, uint64_t> pScopes;
+    std::unordered_map<std::string, uint64_t> stringTable;
+    std::deque<std::string_view> strings;
+    for(const Metric& m: src.metrics().citerate()) {
+      MetricRef mr = m;
+      auto scopes = mr.composeScopes(scopeCursor, m.userdata[src.identifier()],
+        [&](const std::string& s){
+          auto [it, first] = stringTable.try_emplace(s, stringCursor);
+          if(first) {
+            stringCursor += s.size() + 1;
+            strings.push_back(it->first);
+          }
+          return it->second;
+        });
+      f.write(scopes.data(), scopes.size());
+      pScopes.emplace(m, scopeCursor);
+      scopeCursor += scopes.size();
+    }
+
+    // Seek back and write out the *pMetrics array.
+    {
+      std::vector<char> buf(shdr.nMetrics * FMT_METADB_SZ_MetricDesc);
+      size_t metricCursor = 0;
+      for(const auto& [m, ps]: pScopes) {
+        MetricRef mr = m.get();
+        mr.compose(&buf.at(metricCursor), ps, [&](std::string_view sv){
+          strings.push_back(sv);
+          auto ret = stringCursor;
+          stringCursor += sv.size() + 1;
+          return ret;
+        });
+        metricCursor += FMT_METADB_SZ_MetricDesc;
+      }
+      f.seekp(shdr.pMetrics, std::ios_base::beg);
+      f.write(buf.data(), buf.size());
+    }
+
+    // Seek forward and write out all the strings we've been saving
+    f.seekp(stringsStart, std::ios_base::beg);
+    for(const auto& sv: strings) {
+      f.write(sv.data(), sv.size());
+      f.put('\0');
+    }
+    cursor = stringCursor;
+    filehdr.szMetrics = cursor - filehdr.pMetrics;
+  }
+
   { // File header
     char buf[FMT_METADB_SZ_FHdr];
     fmt_metadb_fHdr_write(buf, &filehdr);
@@ -216,4 +293,64 @@ void MetaDB::write() try {
   }
 } catch(const std::exception& e) {
   util::log::fatal{} << "Error while writing meta.db: " << e.what();
+}
+
+MetaDB::MetricRef::MetricRef(const Metric& m) : m(m) {};
+
+template<class Lookup>
+void MetaDB::MetricRef::compose(char buf[FMT_METADB_SZ_MetricDesc],
+                                uint64_t pScopes, const Lookup& str) const {
+  fmt_metadb_metricDesc_t mdesc = {
+    .pName = str(m.name()),
+    .nScopes = static_cast<uint16_t>(m.scopes().count()),
+    .pScopes = pScopes,
+  };
+  fmt_metadb_metricDesc_write(buf, &mdesc);
+}
+
+size_t MetaDB::MetricRef::scopesSize() const {
+  // {MD}, {PS} and {SS} are all 8-aligned and 8-sized, so we can just add
+  // without thinking about the alignments
+  return m.scopes().count() * (FMT_METADB_SZ_MetricScope + m.partials().size() * FMT_METADB_SZ_MetricSummary);
+}
+
+template<class Lookup>
+std::vector<char> MetaDB::MetricRef::composeScopes(uint64_t start,
+    const Metric::Identifier& id, const Lookup& str) const {
+  std::vector<char> buf;
+  buf.resize(m.scopes().count() * FMT_METADB_SZ_MetricScope, 0);
+  size_t scopeCursor = 0;
+  for(MetricScope ms: m.scopes()) {
+    fmt_metadb_metricScope_t scope = {
+      .pScope = str(stringify(ms)),
+      .nSummaries = static_cast<uint16_t>(m.partials().size()),
+      .propMetricId = static_cast<uint16_t>(id.getFor(ms)),
+      .pSummaries = start + buf.size(),
+    };
+    fmt_metadb_metricScope_write(&buf[scopeCursor], &scope);
+    scopeCursor += FMT_METADB_SZ_MetricScope;
+
+    for(const auto& p: m.partials()) {
+      fmt_metadb_metricSummary_t summary = {
+        .pFormula = str(accumulateFormulaString(p.accumulate())),
+        .statMetricId = static_cast<uint16_t>(id.getFor(p, ms)),
+      };
+      switch(p.combinator()) {
+      case Statistic::combination_t::sum:
+        summary.combine = FMT_METADB_COMBINE_Sum;
+        break;
+      case Statistic::combination_t::min:
+        summary.combine = FMT_METADB_COMBINE_Min;
+        break;
+      case Statistic::combination_t::max:
+        summary.combine = FMT_METADB_COMBINE_Max;
+        break;
+      }
+
+      size_t oldsz = buf.size();
+      buf.insert(buf.end(), FMT_METADB_SZ_MetricSummary, 0);
+      fmt_metadb_metricSummary_write(&buf[oldsz], &summary);
+    }
+  }
+  return buf;
 }
