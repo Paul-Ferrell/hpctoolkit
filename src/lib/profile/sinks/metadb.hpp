@@ -62,6 +62,8 @@ public:
 
   static std::string accumulateFormulaString(const Expression&);
 
+  void notifyContext(const Context&) override;
+
   void write() override;
 
   DataClass accepts() const noexcept override {
@@ -93,6 +95,42 @@ private:
 
     const Metric& m;
   };
+
+  std::shared_mutex stringsLock;
+  uint64_t stringsCursor = 0;
+  std::unordered_map<std::string, uint64_t> stringsTable;
+  std::deque<std::string_view> stringsList;
+
+  uint64_t stringsTableLookup(const std::string&);
+
+  struct udFile {
+    uint64_t pPath_base = std::numeric_limits<uint64_t>::max();
+    bool copied : 1;
+    uint64_t ptr = std::numeric_limits<uint64_t>::max();
+  };
+  void instance(const File&);
+
+  struct udModule {
+    uint64_t pPath_base = std::numeric_limits<uint64_t>::max();
+    uint64_t ptr = std::numeric_limits<uint64_t>::max();
+  };
+  void instance(const Module&);
+
+  struct udFunction {
+    uint64_t pName_base = std::numeric_limits<uint64_t>::max();
+    uint64_t ptr = std::numeric_limits<uint64_t>::max();
+  };
+  void instance(const Function&);
+  void instance(Scope::placeholder_t, const Scope&);
+
+  struct {
+    File::ud_t::typed_member_t<udFile> file;
+    const auto& operator()(File::ud_t&) const noexcept { return file; }
+    Module::ud_t::typed_member_t<udModule> module;
+    const auto& operator()(Module::ud_t&) const noexcept { return module; }
+  } ud;
+  util::locked_unordered_map<util::reference_index<const Function>, udFunction> udFuncs;
+  util::locked_unordered_map<uint64_t, udFunction> udPlaceholders;
 };
 
 }  // namespace hpctoolkit::sinks

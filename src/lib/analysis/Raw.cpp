@@ -502,7 +502,7 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
         "  (szMetric: 0x" << (unsigned int)mhdr.szMetric << " >= 0x" << FMT_METADB_SZ_MetricDesc << ")\n"
         "  (szScope: 0x" << (unsigned int)mhdr.szScope << " >= 0x" << FMT_METADB_SZ_MetricScope << ")\n"
         "  (szSummary: 0x" << (unsigned int)mhdr.szSummary << " >= 0x" << FMT_METADB_SZ_MetricSummary << ")\n";
-      for(uint32_t i = 0; i < mhdr.nMetrics; i++) {
+      for(unsigned long i = 0; i < mhdr.nMetrics; i++) {
         fmt_metadb_metricDesc_t mdesc;
         fmt_metadb_metricDesc_read(&mdesc, &buf.at(mhdr.pMetrics + mhdr.szMetric*i - fhdr.pMetrics));
         std::cout <<
@@ -543,7 +543,100 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
         }
         std::cout << "  ]\n";
       }
-      std::cout << "]\n";
+      std::cout << "]\n" << std::dec;
+    }
+
+    std::vector<char> strings;
+    { // Common String Table section
+      if(fseeko(fs, fhdr.pStrings, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Common String Table section");
+      strings = std::vector<char>(fhdr.szStrings);
+      if(fread(strings.data(), 1, strings.size(), fs) < strings.size())
+        DIAG_Throw("eof reading meta.db Common String Table section");
+    }
+
+    { // Load Modules section
+      if(fseeko(fs, fhdr.pModules, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Load Modules section");
+      std::vector<char> buf(fhdr.szModules);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db Load Modules section");
+
+      fmt_metadb_modulesSHdr_t shdr;
+      fmt_metadb_modulesSHdr_read(&shdr, buf.data());
+      std::cout << std::hex <<
+        "[load modules:\n"
+        "  (pModules: 0x" << shdr.pModules << ") (nModules: "
+          << std::dec << shdr.nModules << std::hex << ")\n"
+        "  (szModule: 0x" << shdr.szModule << " >= 0x" << FMT_METADB_SZ_ModuleSpec << ")\n";
+      for(unsigned long i = 0; i < shdr.nModules; i++) {
+        fmt_metadb_moduleSpec_t mspec;
+        auto off = shdr.pModules + shdr.szModule*i;
+        fmt_metadb_moduleSpec_read(&mspec, &buf.at(off - fhdr.pModules));
+        std::cout <<
+          "  [pModules[" << std::dec << i << std::hex << "]: (0x" << off << ")\n"
+          "    (pPath: 0x" << mspec.pPath << " = &\""
+            << &strings.at(mspec.pPath - fhdr.pStrings) << "\")\n"
+          "  ]\n";
+      }
+      std::cout << "]\n" << std::dec;
+    }
+
+    { // Source Files section
+      if(fseeko(fs, fhdr.pFiles, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Source Files section");
+      std::vector<char> buf(fhdr.szFiles);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db Source Files section");
+
+      fmt_metadb_filesSHdr_t shdr;
+      fmt_metadb_filesSHdr_read(&shdr, buf.data());
+      std::cout << std::hex <<
+        "[source files:\n"
+        "  (pFiles: 0x" << shdr.pFiles << ") (nFiles: "
+          << std::dec << shdr.nFiles << std::hex << ")\n"
+        "  (szFile: 0x" << shdr.szFile << " >= 0x" << FMT_METADB_SZ_FileSpec << ")\n";
+      for(unsigned long i = 0; i < shdr.nFiles; i++) {
+        fmt_metadb_fileSpec_t fspec;
+        auto off = shdr.pFiles + shdr.szFile*i;
+        fmt_metadb_fileSpec_read(&fspec, &buf.at(off - fhdr.pFiles));
+        std::cout <<
+          "  [pFiles[" << std::dec << i << std::hex << "]: (0x" << off << ")\n"
+          "    (pPath: 0x" << fspec.pPath << " = &\""
+            << &strings.at(fspec.pPath - fhdr.pStrings) << "\")\n"
+          "  ]\n";
+      }
+      std::cout << "]\n" << std::dec;
+    }
+
+    { // Functions section
+      if(fseeko(fs, fhdr.pFunctions, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Functions section");
+      std::vector<char> buf(fhdr.szFunctions);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db Functions section");
+
+      fmt_metadb_functionsSHdr_t shdr;
+      fmt_metadb_functionsSHdr_read(&shdr, buf.data());
+      std::cout << std::hex <<
+        "[functions:\n"
+        "  (pFunctions: 0x" << shdr.pFunctions << ") (nFunctions: "
+          << std::dec << shdr.nFunctions << std::hex << ")\n"
+        "  (szFunction: 0x" << shdr.szFunction << " >= 0x" << FMT_METADB_SZ_FunctionSpec << ")\n";
+      for(unsigned long i = 0; i < shdr.nFunctions; i++) {
+        fmt_metadb_functionSpec_t fspec;
+        auto off = shdr.pFunctions + shdr.szFunction*i;
+        fmt_metadb_functionSpec_read(&fspec, &buf.at(off - fhdr.pFunctions));
+
+        std::cout <<
+          "  [pFunctions[" << std::dec << i << std::hex << "]: (0x" << off << ")\n"
+          "    (pName: 0x" << fspec.pName << " = &\""
+            << &strings.at(fspec.pName - fhdr.pStrings) << "\")\n"
+          "    (pModule: 0x" << fspec.pModule << ") (offset: 0x" << fspec.offset << ")\n"
+          "    (pFile: 0x" << fspec.pFile << ") (line: " << std::dec << fspec.line << std::hex << ")\n"
+          "  ]\n";
+      }
+      std::cout << "]\n" << std::dec;
     }
   }
   catch(...) {

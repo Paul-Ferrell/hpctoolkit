@@ -61,7 +61,9 @@ MetaDB::MetaDB(stdshim::filesystem::path dir, bool copySources)
   : dir(std::move(dir)), copySources(copySources) {};
 
 void MetaDB::notifyPipeline() noexcept {
-  // TODO
+  auto& ss = src.structs();
+  ud.file = ss.file.add_default<udFile>();
+  ud.module = ss.module.add_default<udModule>();
 }
 
 template<class I>
@@ -119,6 +121,73 @@ std::string MetaDB::accumulateFormulaString(const Expression& e) {
     }
   );
   return ss.str();
+}
+
+uint64_t MetaDB::stringsTableLookup(const std::string& s) {
+  {
+    std::shared_lock<std::shared_mutex> l(stringsLock);
+    auto it = stringsTable.find(s);
+    if(it != stringsTable.end()) return it->second;
+  }
+  std::unique_lock<std::shared_mutex> l(stringsLock);
+  auto [it, first] = stringsTable.try_emplace(s, stringsCursor);
+  if(first) {
+    stringsCursor += s.size() + 1;
+    stringsList.push_back(it->first);
+  }
+  return it->second;
+}
+
+void MetaDB::instance(const File& f) {
+  auto& udf = f.userdata[ud];
+  udf.pPath_base = stringsTableLookup(f.path().string());
+  udf.copied = false;
+}
+
+void MetaDB::instance(const Module& m) {
+  auto& udm = m.userdata[ud];
+  udm.pPath_base = stringsTableLookup(m.path().string());
+}
+
+void MetaDB::instance(const Function& f) {
+  auto [udf, first] = udFuncs.try_emplace(f);
+  if(!first) return;
+  udf.pName_base = stringsTableLookup(f.name());
+  instance(f.module());
+  if(auto sl = f.sourceLocation()) instance(sl->first);
+}
+
+void MetaDB::instance(Scope::placeholder_t, const Scope& s) {
+  auto [udf, first] = udPlaceholders.try_emplace(s.enumerated_data());
+  if(!first) return;
+  std::string name(s.enumerated_pretty_name());
+  if(name.empty()) name = s.enumerated_fallback_name();
+  udf.pName_base = stringsTableLookup(std::move(name));
+}
+
+void MetaDB::notifyContext(const Context& c) {
+  const auto& s = c.scope();
+  switch(s.type()) {
+  case Scope::Type::unknown:
+  case Scope::Type::global:
+    break;
+  case Scope::Type::placeholder:
+    instance(Scope::placeholder, s);
+    break;
+  case Scope::Type::point:
+    instance(s.point_data().first);
+    break;
+  case Scope::Type::loop:
+  case Scope::Type::line:
+    instance(s.line_data().first);
+    break;
+  case Scope::Type::inlined_function:
+    instance(s.line_data().first);
+    // fallthrough
+  case Scope::Type::function:
+    instance(s.function_data());
+    break;
+  }
 }
 
 void MetaDB::write() try {
@@ -284,6 +353,134 @@ void MetaDB::write() try {
     cursor = stringCursor;
     filehdr.szMetrics = cursor - filehdr.pMetrics;
   }
+
+  { // Common String Table section
+    filehdr.pStrings = cursor;
+    for(const auto& sv: stringsList) {
+      f.write(sv.data(), sv.size());
+      f.put('\0');
+      cursor += sv.size() + 1;
+    }
+    filehdr.szStrings = cursor - filehdr.pStrings;
+  }
+
+  { // Load Modules section
+    filehdr.pModules = cursor = align(cursor, 8);
+
+    fmt_metadb_modulesSHdr_t shdr = {
+      .pModules = align(cursor + FMT_METADB_SZ_ModulesSHdr, 8),
+      .nModules = 0,
+    };
+
+    f.seekp(cursor = shdr.pModules, std::ios_base::beg);
+    for(const Module& m: src.modules().citerate()) {
+      auto& udm = m.userdata[ud];
+      if(udm.pPath_base == std::numeric_limits<uint64_t>::max()) continue;
+      shdr.nModules++;
+      udm.ptr = cursor;
+
+      fmt_metadb_moduleSpec_t mspec = {
+        .pPath = filehdr.pStrings + udm.pPath_base,
+      };
+      char buf[FMT_METADB_SZ_ModuleSpec];
+      fmt_metadb_moduleSpec_write(buf, &mspec);
+      f.write(buf, sizeof buf);
+      cursor += sizeof buf;
+    }
+    filehdr.szModules = cursor - filehdr.pModules;
+
+    // Seek back and write the section header
+    f.seekp(filehdr.pModules, std::ios_base::beg);
+    char buf[FMT_METADB_SZ_ModulesSHdr];
+    fmt_metadb_modulesSHdr_write(buf, &shdr);
+    f.write(buf, sizeof buf);
+  }
+  // NOTE: cursor and file cursor out of sync here
+
+  { // Source Files section
+    filehdr.pFiles = cursor = align(cursor, 8);
+
+    fmt_metadb_filesSHdr_t shdr = {
+      .pFiles = align(cursor + FMT_METADB_SZ_FilesSHdr, 8),
+      .nFiles = 0,
+    };
+
+    f.seekp(cursor = shdr.pFiles, std::ios_base::beg);
+    for(const File& ff: src.files().citerate()) {
+      auto& udf = ff.userdata[ud];
+      if(udf.pPath_base == std::numeric_limits<uint64_t>::max()) continue;
+      shdr.nFiles++;
+      udf.ptr = cursor;
+
+      fmt_metadb_fileSpec_t fspec = {
+        .copied = udf.copied,
+        .pPath = filehdr.pStrings + udf.pPath_base,
+      };
+      char buf[FMT_METADB_SZ_FileSpec];
+      fmt_metadb_fileSpec_write(buf, &fspec);
+      f.write(buf, sizeof buf);
+      cursor += sizeof buf;
+    }
+    filehdr.szFiles = cursor - filehdr.pFiles;
+
+    // Seek back and write the section header
+    f.seekp(filehdr.pFiles, std::ios_base::beg);
+    char buf[FMT_METADB_SZ_FilesSHdr];
+    fmt_metadb_filesSHdr_write(buf, &shdr);
+    f.write(buf, sizeof buf);
+  }
+  // NOTE: cursor and file cursor out of sync here
+
+  { // Functions section
+    filehdr.pFunctions = cursor = align(cursor, 8);
+
+    fmt_metadb_functionsSHdr_t shdr = {
+      .pFunctions = align(cursor + FMT_METADB_SZ_FunctionsSHdr, 8),
+      .nFunctions = 0,
+    };
+
+    f.seekp(cursor = shdr.pFunctions, std::ios_base::beg);
+    for(auto& [rff, udf]: udFuncs.iterate()) {
+      const Function& ff = rff;
+      shdr.nFunctions++;
+      udf.ptr = cursor;
+
+      auto sl = ff.sourceLocation();
+      fmt_metadb_functionSpec_t fspec = {
+        .pName = filehdr.pStrings + udf.pName_base,
+        .pModule = ff.module().userdata[ud].ptr,
+        .offset = ff.offset().value_or(0),
+        .pFile = sl ? sl->first.userdata[ud].ptr : 0,
+        .line = sl ? static_cast<uint32_t>(sl->second) : 0,
+      };
+      char buf[FMT_METADB_SZ_FunctionSpec];
+      fmt_metadb_functionSpec_write(buf, &fspec);
+      f.write(buf, sizeof buf);
+      cursor += sizeof buf;
+    }
+    for(auto& [dat, udf]: udPlaceholders.iterate()) {
+      shdr.nFunctions++;
+      udf.ptr = cursor;
+
+      fmt_metadb_functionSpec_t fspec = {
+        .pName = filehdr.pStrings + udf.pName_base,
+        .pModule = 0, .offset = 0,
+        .pFile = 0, .line = 0,
+      };
+      char buf[FMT_METADB_SZ_FunctionSpec];
+      fmt_metadb_functionSpec_write(buf, &fspec);
+      f.write(buf, sizeof buf);
+      cursor += sizeof buf;
+    }
+    filehdr.szFunctions = cursor - filehdr.pFunctions;
+
+    // Seek back and write the section header
+    f.seekp(filehdr.pFunctions, std::ios_base::beg);
+    char buf[FMT_METADB_SZ_FunctionsSHdr];
+    fmt_metadb_functionsSHdr_write(buf, &shdr);
+    f.write(buf, sizeof buf);
+  }
+  // NOTE: cursor and file cursor out of sync here
 
   { // File header
     char buf[FMT_METADB_SZ_FHdr];
