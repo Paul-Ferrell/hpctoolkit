@@ -434,7 +434,7 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
         DIAG_Throw("eof reading meta.db file header");
       fmt_metadb_fHdr_read(&fhdr, buf);
       std::cout << std::hex <<
-        "[meta.db file header:\n"
+        "[file header:\n"
         "  (szGeneral: 0x" << fhdr.szGeneral << ") (pGeneral: 0x" << fhdr.pGeneral <<  ")\n"
         "  (szIdNames: 0x" << fhdr.szIdNames << ") (pIdNames: 0x" << fhdr.pIdNames <<  ")\n"
         "  (szMetrics: 0x" << fhdr.szMetrics << ") (pMetrics: 0x" << fhdr.pMetrics <<  ")\n"
@@ -457,9 +457,9 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
       fmt_metadb_generalSHdr_read(&gphdr, buf.data());
       std::cout << std::hex <<
         "[general properties:\n"
-        "  (pTitle: 0x" << gphdr.pTitle << " = \""
+        "  (pTitle: 0x" << gphdr.pTitle << " = &\""
           << &buf.at(gphdr.pTitle - fhdr.pGeneral) << "\")\n"
-        "  (pDescription: 0x" << gphdr.pDescription << " = \"\"\"\n"
+        "  (pDescription: 0x" << gphdr.pDescription << " = &\"\"\"\n"
           << &buf.at(gphdr.pDescription - fhdr.pGeneral) << "\n"
         "\"\"\")\n"
         "]\n" << std::dec;
@@ -480,7 +480,7 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
             << std::dec << (unsigned int)idhdr.nKinds << ")\n" << std::hex;
       for(unsigned int i = 0; i < idhdr.nKinds; i++) {
         auto pName = fmt_u64_read(&buf.at(idhdr.ppNames + 8*i - fhdr.pIdNames));
-        std::cout << "    (ppNames[" << i << "]: 0x" << pName << " = \""
+        std::cout << "    (ppNames[" << i << "]: 0x" << pName << " = &\""
                   << &buf.at(pName - fhdr.pIdNames) << "\")\n";
       }
       std::cout << "]\n" << std::dec;
