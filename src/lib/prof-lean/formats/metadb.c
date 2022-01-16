@@ -166,13 +166,13 @@ void fmt_metadb_metricScope_read(fmt_metadb_metricScope_t* ps, const char d[FMT_
   ps->pScope = fmt_u64_read(d+0x00);
   ps->nSummaries = fmt_u16_read(d+0x08);
   ps->propMetricId = fmt_u16_read(d+0x0a);
-  ps->pScope = fmt_u64_read(d+0x10);
+  ps->pSummaries = fmt_u64_read(d+0x10);
 }
 void fmt_metadb_metricScope_write(char d[FMT_METADB_SZ_MetricScope], const fmt_metadb_metricScope_t* ps) {
   fmt_u64_write(d+0x00, ps->pScope);
   fmt_u16_write(d+0x08, ps->nSummaries);
   fmt_u16_write(d+0x0a, ps->propMetricId);
-  fmt_u64_write(d+0x10, ps->pScope);
+  fmt_u64_write(d+0x10, ps->pSummaries);
 }
 
 void fmt_metadb_metricSummary_read(fmt_metadb_metricSummary_t* ss, const char d[FMT_METADB_SZ_MetricSummary]) {

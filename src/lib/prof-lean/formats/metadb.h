@@ -162,7 +162,7 @@ typedef struct fmt_metadb_metricScope_t {
   uint64_t pScope;
   uint16_t nSummaries;
   uint16_t propMetricId;
-  uint16_t pSummaries;
+  uint64_t pSummaries;
 } fmt_metadb_metricScope_t;
 
 void fmt_metadb_metricScope_read(fmt_metadb_metricScope_t*, const char[FMT_METADB_SZ_MetricScope]);
