@@ -542,6 +542,9 @@ Additional notes:
    Context Tree section. The size of these arrays is given in `szRoots` or
    `szChildren`, in bytes to allow for a singular read of all root/child
    context structures.
+ - `pChildren` is 0 if there are no child Contexts, `pRoots` is 0 if there are
+   no Contexts in this section period. `szChildren` and `szRoots` are 0 in these
+   cases respectively.
  - `pFunction` points within the [Function section](#metadb-function-section).
  - `pFile` points within the [Source File section](#metadb-source-file-section).
  - `pModule` points within the [Load Module section](#metadb-load-module-section).
