@@ -49,8 +49,6 @@
 #include "context.hpp"
 #include "metric.hpp"
 
-#include <yaml-cpp/yaml.h>
-
 #include <ostream>
 #include <stack>
 
@@ -70,9 +68,6 @@ const std::string& hpctoolkit::stringify(MetricScope ms) {
 }
 std::ostream& hpctoolkit::operator<<(std::ostream& os, MetricScope ms) {
   return os << stringify(ms);
-}
-YAML::Emitter& hpctoolkit::operator<<(YAML::Emitter& e, MetricScope ms) {
-  return e << stringify(ms);
 }
 
 static double atomic_add(std::atomic<double>& a, const double v) noexcept {

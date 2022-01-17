@@ -94,8 +94,28 @@ static std::string sanitize(const std::string& s) {
 
 static std::string anchorName(const Metric& m, const StatisticPartial& p, MetricScope s) {
   std::ostringstream ss;
-  ss << sanitize(m.name()) << '-' << p.combinator() << '-' << p.accumulate() << '-' << s;
-  return ss.str();
+  ss << m.name() << '-' << p.combinator() << '-' << p.accumulate() << '-' << s;
+  return sanitize(ss.str());
+}
+
+// These need to be in the YAML namespace for ADL to work properly
+namespace YAML {
+static YAML::Emitter& operator<<(YAML::Emitter& e, const Statistic::combination_t c) {
+  switch(c) {
+  case Statistic::combination_t::sum: return e << "sum";
+  case Statistic::combination_t::min: return e << "min";
+  case Statistic::combination_t::max: return e << "max";
+  }
+  std::abort();
+}
+static YAML::Emitter& operator<<(YAML::Emitter& e, const MetricScope ms) {
+  switch(ms) {
+  case MetricScope::point: return e << "point";
+  case MetricScope::function: return e << "function";
+  case MetricScope::execution: return e << "execution";
+  }
+  std::abort();
+}
 }
 
 static util::optional_ref<const Metric> claim(std::unordered_map<std::string_view, const Metric&>::node_type&& node) {

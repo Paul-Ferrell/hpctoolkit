@@ -309,10 +309,6 @@ hpcfmt_str_ensure(const char* x)
   return (x) ? x : "";
 }
 
-// Null-terminated string support
-int hpcfmt_nullstr_fread(char** str, FILE* infs);
-
-int hpcfmt_nullstr_fwrite(const char* str, FILE* fs);
 
 //***************************************************************************
 // hpcfmt_nvpair_t

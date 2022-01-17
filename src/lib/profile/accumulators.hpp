@@ -59,10 +59,6 @@
 #include <optional>
 #include <vector>
 
-namespace YAML {
-class Emitter;
-}
-
 namespace hpctoolkit {
 
 class Metric;
@@ -94,7 +90,6 @@ enum class MetricScope : size_t {
 
 /// Standardized stringification for MetricScope constants.
 std::ostream& operator<<(std::ostream&, MetricScope);
-YAML::Emitter& operator<<(YAML::Emitter&, MetricScope);
 const std::string& stringify(MetricScope);
 
 /// Bitset-like object used as a set of Scope values.

@@ -166,7 +166,7 @@ void MetaDB::instance(Scope::placeholder_t, const Scope& s) {
 }
 
 void MetaDB::notifyContext(const Context& c) {
-  const auto& s = c.scope();
+  const auto& s = c.scope().flat();
   switch(s.type()) {
   case Scope::Type::unknown:
   case Scope::Type::global:
@@ -181,9 +181,6 @@ void MetaDB::notifyContext(const Context& c) {
   case Scope::Type::line:
     instance(s.line_data().first);
     break;
-  case Scope::Type::inlined_function:
-    instance(s.line_data().first);
-    // fallthrough
   case Scope::Type::function:
     instance(s.function_data());
     break;
