@@ -123,11 +123,18 @@ private:
   void instance(const Function&);
   void instance(Scope::placeholder_t, const Scope&);
 
+  struct udContext {
+    uint64_t szChildren = 0;
+    uint64_t pChildren = 0;
+  };
+
   struct {
     File::ud_t::typed_member_t<udFile> file;
     const auto& operator()(File::ud_t&) const noexcept { return file; }
     Module::ud_t::typed_member_t<udModule> module;
     const auto& operator()(Module::ud_t&) const noexcept { return module; }
+    Context::ud_t::typed_member_t<udContext> context;
+    const auto& operator()(Context::ud_t&) const noexcept { return context; }
   } ud;
   util::locked_unordered_map<util::reference_index<const Function>, udFunction> udFuncs;
   util::locked_unordered_map<uint64_t, udFunction> udPlaceholders;

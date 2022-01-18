@@ -638,6 +638,72 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
       }
       std::cout << "]\n" << std::dec;
     }
+
+    { // Context Tree section
+      if(fseeko(fs, fhdr.pContext, SEEK_SET) < 0)
+        DIAG_Throw("error seeking to meta.db Context Tree section");
+      std::vector<char> buf(fhdr.szContext);
+      if(fread(buf.data(), 1, buf.size(), fs) < buf.size())
+        DIAG_Throw("eof reading meta.db Context Tree section");
+
+      const auto indent = [](unsigned int level) -> std::ostream& {
+        for(unsigned int l = 0; l < level; l++) std::cout << "  ";
+        return std::cout;
+      };
+      const std::function<void(unsigned int, uint64_t, uint64_t)> print
+          = [&](unsigned int l, uint64_t pCtxs, uint64_t szCtxs){
+        while(szCtxs > 0) {
+          if(szCtxs < FMT_METADB_MINSZ_Context) {
+            indent(l) << "ERROR: not enough bytes for next context, terminating iteration\n";
+            return;
+          }
+          fmt_metadb_context_t ctx;
+          if(!fmt_metadb_context_read(&ctx, &buf.at(pCtxs - fhdr.pContext))) {
+            indent(l) << "ERROR: invalid next context, terminating iteration\n";
+            return;
+          }
+          indent(l) << std::dec <<
+            "[context: (relation: " << (
+              ctx.relation == FMT_METADB_RELATION_LexicalNest ? "lexical nest" :
+              ctx.relation == FMT_METADB_RELATION_Call ? "call" :
+              ctx.relation == FMT_METADB_RELATION_InlinedCall ? "inlined call" :
+              "???") << ") (ctxId: " << ctx.ctxId << ")"
+              " (0x" << std::hex << pCtxs << ")\n";
+          indent(l) << std::hex <<
+            "  (szChildren: 0x" << ctx.szChildren << ") (pChildren: 0x" << ctx.pChildren << ")\n";
+          indent(l) << std::hex <<
+            "  (lexicalType: " << (
+              ctx.lexicalType == FMT_METADB_LEXTYPE_Function ? "function" :
+              ctx.lexicalType == FMT_METADB_LEXTYPE_Line ? "line" :
+              ctx.lexicalType == FMT_METADB_LEXTYPE_Loop ? "loop" :
+              ctx.lexicalType == FMT_METADB_LEXTYPE_Instruction ? "instruction" :
+              "???") << ")\n";
+          indent(l) << std::hex <<
+            "  (pFunction: 0x" << ctx.pFunction << ")\n";
+          indent(l) << std::hex <<
+            "  (pFile: 0x" << ctx.pFile << ") (line: " << std::dec << ctx.line << ")\n";
+          indent(l) << std::hex <<
+            "  (pModule: 0x" << ctx.pModule << ") (offset: 0x" << ctx.offset << ")\n";
+          print(l+1, ctx.pChildren, ctx.szChildren);
+          indent(l) << "]\n";
+          if(szCtxs < (uint64_t)FMT_METADB_SZ_Context(ctx.nFlexWords)) {
+            indent(l) << "ERROR: array size too short!";
+            break;
+          } else {
+            szCtxs -= FMT_METADB_SZ_Context(ctx.nFlexWords);
+            pCtxs += FMT_METADB_SZ_Context(ctx.nFlexWords);
+          }
+        };
+      };
+
+      fmt_metadb_contextsSHdr_t shdr;
+      fmt_metadb_contextsSHdr_read(&shdr, buf.data());
+      std::cout << std::hex <<
+        "[context tree:\n"
+        "  (szRoots: 0x" << shdr.szRoots << ") (pRoots: 0x" << shdr.pRoots << ")\n";
+      print(0, shdr.pRoots, shdr.szRoots);
+      std::cout << "]\n";
+    }
   }
   catch(...) {
     DIAG_EMsg("While reading '" << filenm << "'...");

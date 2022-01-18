@@ -64,6 +64,7 @@ void MetaDB::notifyPipeline() noexcept {
   auto& ss = src.structs();
   ud.file = ss.file.add_default<udFile>();
   ud.module = ss.module.add_default<udModule>();
+  ud.context = ss.context.add_default<udContext>();
 }
 
 template<class I>
@@ -475,6 +476,109 @@ void MetaDB::write() try {
     f.seekp(filehdr.pFunctions, std::ios_base::beg);
     char buf[FMT_METADB_SZ_FunctionsSHdr];
     fmt_metadb_functionsSHdr_write(buf, &shdr);
+    f.write(buf, sizeof buf);
+  }
+  // NOTE: cursor and file cursor out of sync here
+
+  { // Context Tree section
+    f.seekp(filehdr.pContext = cursor = align(cursor, 8), std::ios_base::beg);
+
+    const auto compose = [this](const Context& c, std::vector<char>& out) {
+      const auto& udc = c.userdata[ud];
+      fmt_metadb_context_t ctx = {
+        .szChildren = udc.szChildren, .pChildren = udc.pChildren,
+        .ctxId = c.userdata[src.identifier()],
+        .pFunction = 0, .pFile = 0, .pModule = 0,
+      };
+      switch(c.scope().relation()) {
+      case Relation::global: std::abort();
+      case Relation::enclosure:
+        ctx.relation = FMT_METADB_RELATION_LexicalNest;
+        break;
+      case Relation::call:
+        ctx.relation = FMT_METADB_RELATION_Call;
+        break;
+      case Relation::inlined_call:
+        ctx.relation = FMT_METADB_RELATION_InlinedCall;
+        break;
+      }
+
+      const auto setFunction = [&](const udFunction& ud){
+        ctx.pFunction = ud.ptr;
+        assert(ctx.pFunction != std::numeric_limits<uint64_t>::max());
+      };
+      const auto setSrcLine = [&]{
+        const auto [f, l] = c.scope().flat().line_data();
+        ctx.pFile = f.userdata[ud].ptr;
+        assert(ctx.pFile != std::numeric_limits<uint64_t>::max());
+        ctx.line = l;
+      };
+      const auto setPoint = [&]{
+        const auto [m, o] = c.scope().flat().point_data();
+        ctx.pModule = m.userdata[ud].ptr;
+        assert(ctx.pModule != std::numeric_limits<uint64_t>::max());
+        ctx.offset = o;
+      };
+
+      switch(c.scope().flat().type()) {
+      case Scope::Type::global: std::abort();
+      case Scope::Type::unknown:
+        ctx.lexicalType = FMT_METADB_LEXTYPE_Function;
+        // ...But we don't know the function, so pFunction = 0 still.
+        break;
+      case Scope::Type::function:
+        ctx.lexicalType = FMT_METADB_LEXTYPE_Function;
+        setFunction(udFuncs.at(c.scope().flat().function_data()));
+        break;
+      case Scope::Type::placeholder:
+        ctx.lexicalType = FMT_METADB_LEXTYPE_Function;
+        setFunction(udPlaceholders.at(c.scope().flat().enumerated_data()));
+        break;
+      case Scope::Type::line:
+        ctx.lexicalType = FMT_METADB_LEXTYPE_Line;
+        setSrcLine();
+        break;
+      case Scope::Type::loop:
+        ctx.lexicalType = FMT_METADB_LEXTYPE_Loop;
+        setSrcLine();
+        break;
+      case Scope::Type::point:
+        ctx.lexicalType = FMT_METADB_LEXTYPE_Instruction;
+        setPoint();
+        break;
+      }
+
+      auto oldsz = out.size();
+      out.resize(out.size() + FMT_METADB_MAXSZ_Context);
+      auto used = fmt_metadb_context_write(&out[oldsz], &ctx);
+      out.resize(oldsz + used);
+    };
+
+    f.seekp(cursor = align(cursor + FMT_METADB_SZ_ContextsSHdr, 8), std::ios_base::beg);
+
+    // Output Contexts in reversed DFS order, since that's easier to implement
+    // Since Contexts are 8-aligned and 8-sized, we don't need to seek in here
+    src.contexts().citerate(nullptr, [&](const Context& c){
+      if(c.children().empty()) return;
+
+      auto& udc = c.userdata[ud];
+      std::vector<char> buf;
+      for(const Context& cc: c.children().citerate())
+        compose(cc, buf);
+      udc.pChildren = cursor;
+      f.write(buf.data(), buf.size());
+      cursor += udc.szChildren = buf.size();
+    });
+    filehdr.szContext = cursor - filehdr.pContext;
+
+    // Seek back and write out the section header, based on the global Context
+    const auto& udc = src.contexts().userdata[ud];
+    fmt_metadb_contextsSHdr_t shdr = {
+      .szRoots = udc.szChildren, .pRoots = udc.pChildren,
+    };
+    char buf[FMT_METADB_SZ_ContextsSHdr];
+    fmt_metadb_contextsSHdr_write(buf, &shdr);
+    f.seekp(filehdr.pContext, std::ios_base::beg);
     f.write(buf, sizeof buf);
   }
   // NOTE: cursor and file cursor out of sync here
