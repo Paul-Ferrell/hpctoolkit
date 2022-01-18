@@ -306,6 +306,7 @@ size_t fmt_metadb_context_write(char* d, const fmt_metadb_context_t* ctx) {
   fmt_u64_write(d+0x00, ctx->szChildren);
   fmt_u64_write(d+0x08, ctx->pChildren);
   fmt_u32_write(d+0x10, ctx->ctxId);
+  d[0x14] = 0;
   d[0x15] = ctx->relation;
   d[0x16] = ctx->lexicalType;
 
@@ -314,17 +315,20 @@ size_t fmt_metadb_context_write(char* d, const fmt_metadb_context_t* ctx) {
   int nwords = 0;
 
   if(ctx->pFunction != 0) {
+    d[0x14] |= 0x1;  // hasFunction
     fmt_u64_write(d+0x18+nwords*8, ctx->pFunction);
     nwords += 1;
   }
 
   if(ctx->pFile != 0) {
+    d[0x14] |= 0x2;  // hasSrcLine
     fmt_u64_write(d+0x18+nwords*8, ctx->pFile);
     fmt_u32_write(d+0x18+(nwords+1)*8, ctx->line);
     nwords += 2;
   }
 
   if(ctx->pModule != 0) {
+    d[0x14] |= 0x4;  // hasPoint
     fmt_u64_write(d+0x18+nwords*8, ctx->pModule);
     fmt_u64_write(d+0x18+(nwords+1)*8, ctx->offset);
     nwords += 2;
