@@ -704,6 +704,19 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
       print(0, shdr.pRoots, shdr.szRoots);
       std::cout << "]\n";
     }
+
+    { // File footer
+      char buf[sizeof fmt_metadb_footer];
+      if(fseeko(fs, -sizeof buf, SEEK_END) < 0)
+        DIAG_Throw("error seeking to meta.db footer");
+      if(fread(buf, 1, sizeof buf, fs) < sizeof buf)
+        DIAG_Throw("error reading meta.db footer");
+      std::cout << "[footer: '" << std::string_view(buf, sizeof buf) << "'";
+      if(memcmp(buf, fmt_metadb_footer, sizeof buf) == 0)
+        std::cout << ", OK]\n";
+      else
+        std::cout << ", INVALID]\n";
+    }
   }
   catch(...) {
     DIAG_EMsg("While reading '" << filenm << "'...");

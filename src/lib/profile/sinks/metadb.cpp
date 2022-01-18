@@ -583,6 +583,11 @@ void MetaDB::write() try {
   }
   // NOTE: cursor and file cursor out of sync here
 
+  { // File footer
+    f.seekp(cursor, std::ios_base::beg);
+    f.write(fmt_metadb_footer, sizeof fmt_metadb_footer);
+  }
+
   { // File header
     char buf[FMT_METADB_SZ_FHdr];
     fmt_metadb_fHdr_write(buf, &filehdr);
