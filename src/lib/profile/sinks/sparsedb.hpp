@@ -119,12 +119,6 @@ private:
   std::vector<std::reference_wrapper<const hpctoolkit::Context>> contexts;
   hpctoolkit::util::Once contextWavefront;
 
-  // binary search over a vector of T, unlike std::binary_search, which only returns true/false,
-  // this returns the idx of found one, SPARSE_ERR as NOT FOUND
-  template<typename T, typename MemberT>
-  int struct_member_binary_search(
-      const std::vector<T>& datas, const T target, const MemberT target_type, const int length);
-
 //***************************************************************************
 // profile.db
 //***************************************************************************
@@ -247,16 +241,8 @@ private:
   };
   hpctoolkit::util::ResettableParallelForEach<profData> parForPd;
 
-  int findOneCtxIdIdxPair(
-      const uint32_t target_ctx_id, const std::vector<PMS_CtxIdIdxPair>& profile_ctx_pairs,
-      const uint length, const int round, const int found_ctx_idx,
-      std::vector<std::pair<uint32_t, uint64_t>>& my_ctx_pairs);
-
-  std::vector<std::pair<uint32_t, uint64_t>> myCtxPairs(
+  std::vector<std::pair<uint32_t, uint64_t>> filterCtxPairs(
       const std::vector<uint32_t>& ctx_ids, const std::vector<PMS_CtxIdIdxPair>& profile_ctx_pairs);
-
-  std::vector<char>
-  valMidsBytes(std::vector<std::pair<uint32_t, uint64_t>>& my_ctx_pairs, const uint64_t& off);
 
   void handleItemPd(profData& pd);
 

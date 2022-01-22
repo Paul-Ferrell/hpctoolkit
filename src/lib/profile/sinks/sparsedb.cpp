@@ -1053,105 +1053,74 @@ void SparseDB::fillAllProfileCtxIdIdxPairs() {
   parForCiip.contribute(parForCiip.wait());
 }
 
-//
-// helper - extract one profile data
-//
-int SparseDB::findOneCtxIdIdxPair(
-    const uint32_t target_ctx_id, const std::vector<PMS_CtxIdIdxPair>& profile_ctx_pairs,
-    const uint length, const int round, const int found_ctx_idx,
-    std::vector<std::pair<uint32_t, uint64_t>>& my_ctx_pairs) {
-  int idx;
-
-  if (round != 0) {
-    idx = 1 + found_ctx_idx;
-
-    // the profile_ctx_pairs has been searched through
-    if (idx == (int)length)
-      return SPARSE_END;
-
-    // the ctx_id at idx
-    uint32_t prof_ctx_id = profile_ctx_pairs[idx].ctx_id;
-    if (prof_ctx_id == target_ctx_id) {
-      my_ctx_pairs.emplace_back(profile_ctx_pairs[idx].ctx_id, profile_ctx_pairs[idx].ctx_idx);
-      return idx;
-    } else if (prof_ctx_id > target_ctx_id) {
-      return SPARSE_NOT_FOUND;  // back to original since this might be next target
-    } else {                    // prof_ctx_id < target_ctx_id, should not happen
-      util::log::fatal() << __FUNCTION__ << ": ctx id " << prof_ctx_id
-                         << " in a profile does not exist in the full ctx list while searching for "
-                         << target_ctx_id << " with index " << idx << "!";
-      return SPARSE_NOT_FOUND;  // this should not be called if exit, but function requires return
-                                // value
-    }
-  } else {
-    PMS_CtxIdIdxPair target_ciip;
-    target_ciip.ctx_id = target_ctx_id;
-    idx = struct_member_binary_search(
-        profile_ctx_pairs, target_ciip, &PMS_CtxIdIdxPair::ctx_id, length);
-    if (idx >= 0)
-      my_ctx_pairs.emplace_back(profile_ctx_pairs[idx].ctx_id, profile_ctx_pairs[idx].ctx_idx);
-    else if (idx == -1)  // target < the first value, so start future searches at 0
-      idx = -1;
-    else if (idx < -1)  // target > some value at (-2-idx), so start future searches at (-2-idx) + 1
-      idx = -2 - idx;
-    return idx;
-  }
-}
-
-std::vector<std::pair<uint32_t, uint64_t>> SparseDB::myCtxPairs(
+std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
     const std::vector<uint32_t>& ctx_ids, const std::vector<PMS_CtxIdIdxPair>& profile_ctx_pairs) {
-  std::vector<std::pair<uint32_t, uint64_t>> my_ctx_pairs;
-  if (profile_ctx_pairs.size() == 1)
-    return my_ctx_pairs;
+  if (profile_ctx_pairs.size() <= 1 || ctx_ids.empty())
+    return {};
+  assert(std::is_sorted(ctx_ids.begin(), ctx_ids.end()));
 
-  uint n = profile_ctx_pairs.size() - 1;  // since the last is LastNodeEnd
-  int idx = -1;                           // index of current pair in profile_ctx_pairs
-  uint32_t target;
+  // Wrapper iterator to view the ctx_id of a PMS_CtxIdIdxPair
+  struct ctx_id_it : std::vector<PMS_CtxIdIdxPair>::const_iterator {
+    ctx_id_it(std::vector<PMS_CtxIdIdxPair>::const_iterator v)
+        : std::vector<PMS_CtxIdIdxPair>::const_iterator(std::move(v)) {}
+    const auto& operator*() const noexcept {
+      return std::vector<PMS_CtxIdIdxPair>::const_iterator::operator->()->ctx_id;
+    }
+    const auto* operator->() const noexcept {
+      return &std::vector<PMS_CtxIdIdxPair>::const_iterator::operator->()->ctx_id;
+    }
+  };
 
-  for (uint i = 0; i < ctx_ids.size(); i++) {
-    target = ctx_ids[i];
-    int ret = findOneCtxIdIdxPair(target, profile_ctx_pairs, n, i, idx, my_ctx_pairs);
-    if (ret == SPARSE_END)
-      break;
-    if (ret == SPARSE_NOT_FOUND)
-      continue;
+  // Iterator storage for the two inputs. Last element of profile_ctx_pairs is
+  // LastNodeEnd, so we skip it here.
+  std::vector<PMS_CtxIdIdxPair>::const_iterator curIn;
+  const auto lastIn = --profile_ctx_pairs.end();
+  auto curTarget = ctx_ids.begin();
+  const auto lastTarget = ctx_ids.end();
 
-    idx = ret;
+  // Binary search down to the first ctx_id we want to extract...
+  curIn =
+      std::lower_bound(ctx_id_it(profile_ctx_pairs.begin()), ctx_id_it(lastIn), ctx_ids.front());
+
+  // ...And then use normal iteration to find the others, until we run out.
+  std::vector<std::pair<uint32_t, uint64_t>> out;
+  while (curIn != lastIn && curTarget != lastTarget) {
+    if (curIn->ctx_id < *curTarget)
+      ++curIn;
+    else if (curIn->ctx_id > *curTarget)
+      ++curTarget;
+    else {  // curIn->ctxId == *curTarget
+      out.emplace_back(curIn->ctx_id, curIn->ctx_idx);
+      ++curIn;
+      ++curTarget;
+    }
   }
 
-  // add one extra context pair for later use
-  my_ctx_pairs.emplace_back(LastNodeEnd, profile_ctx_pairs[idx + 1].ctx_idx);
+  // Last pair is always LastNodeEnd
+  out.emplace_back(LastNodeEnd, curIn->ctx_idx);
 
-  assert(my_ctx_pairs.size() <= ctx_ids.size() + 1);
-  return my_ctx_pairs;
-}
-
-std::vector<char> SparseDB::valMidsBytes(
-    std::vector<std::pair<uint32_t, uint64_t>>& my_ctx_pairs, const uint64_t& off) {
-  std::vector<char> bytes;
-  if (my_ctx_pairs.size() <= 1)
-    return bytes;
-
-  uint64_t first_ctx_idx = my_ctx_pairs.front().second;
-  uint64_t last_ctx_idx = my_ctx_pairs.back().second;
-  int val_mid_count = (last_ctx_idx - first_ctx_idx) * (PMS_val_SIZE + PMS_mid_SIZE);
-  if (val_mid_count == 0)
-    return bytes;
-
-  bytes.resize(val_mid_count);
-  uint64_t val_mid_start_pos = off + first_ctx_idx * (PMS_val_SIZE + PMS_mid_SIZE);
-
-  auto pmfi = pmf->open(false, false);
-  pmfi.readat(val_mid_start_pos, val_mid_count, bytes.data());
-  return bytes;
+  assert(out.size() <= ctx_ids.size() + 1);
+  return out;
 }
 
 void SparseDB::handleItemPd(profData& pd) {
-  uint i = pd.i;
-  auto poff = pd.pi_list->at(i).offset;
+  // Extract the ctx_id/idx pairs that we need for this blob
+  auto pairs = filterCtxPairs(*(pd.ctx_ids), pd.all_prof_ctx_pairs->at(pd.i));
 
-  auto my_ctx_pairs = std::move(myCtxPairs(*(pd.ctx_ids), pd.all_prof_ctx_pairs->at(i)));
-  pd.profiles_data->at(i) = {std::move(my_ctx_pairs), std::move(valMidsBytes(my_ctx_pairs, poff))};
+  // Read the blob of data containing all our pairs
+  std::vector<char> blob;
+  if (pairs.size() > 1) {
+    blob.resize((pairs.back().second - pairs.front().second) * PMS_vm_pair_SIZE);
+    assert(!blob.empty());
+
+    auto pmfi = pmf->open(false, false);
+    pmfi.readat(
+        pd.pi_list->at(pd.i).offset + pairs.front().second * PMS_vm_pair_SIZE, blob.size(),
+        blob.data());
+  }
+
+  // Update the profData with the data we gathered
+  pd.profiles_data->at(pd.i) = {std::move(pairs), std::move(blob)};
 }
 
 std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>
@@ -1483,28 +1452,4 @@ void SparseDB::rwAllCtxGroup() {
 
   parForCtxs.fill({});
   parForCtxs.complete();
-}
-
-template<typename T, typename MemberT>
-int SparseDB::struct_member_binary_search(
-    const std::vector<T>& datas, const T target, const MemberT target_type, const int length) {
-  int m;
-  int L = 0;
-  int R = length - 1;
-  while (L <= R) {
-    m = (L + R) / 2;
-
-    auto target_val = target.*target_type;
-    auto comp_val = datas[m].*target_type;
-
-    if (comp_val < target_val) {
-      L = m + 1;
-    } else if (comp_val > target_val) {
-      R = m - 1;
-    } else {  // find match
-      return m;
-    }
-  }
-
-  return (R == -1) ? R : (-2 - R);  // make it negative to differentiate it from found
 }
