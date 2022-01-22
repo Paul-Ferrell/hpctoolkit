@@ -66,12 +66,11 @@ using namespace hpctoolkit;
 using namespace hpctoolkit::sinks;
 
 SparseDB::SparseDB(stdshim::filesystem::path p)
-    : dir(std::move(p)), rank(mpi::World::rank()), ctxMaxId(0),
-      parForPi([&](pms_profile_info_t& item) { handleItemPi(item); }), fpos(0),
+    : dir(std::move(p)), parForPi([&](pms_profile_info_t& item) { handleItemPi(item); }),
       accFpos(mpi::Tag::SparseDB_1),
       parForCiip([&](profCtxIdIdxPairs& item) { handleItemCiip(item); }),
-      parForPd([&](profData& item) { handleItemPd(item); }), ctxGrpId(0),
-      accCtxGrp(mpi::Tag::SparseDB_2), parForCtxs([&](ctxRange& item) { handleItemCtxs(item); }) {
+      parForPd([&](profData& item) { handleItemPd(item); }), accCtxGrp(mpi::Tag::SparseDB_2),
+      parForCtxs([&](ctxRange& item) { handleItemCtxs(item); }) {
   if (dir.empty())
     util::log::fatal{} << "SparseDB doesn't allow for dry runs!";
   else
@@ -105,7 +104,6 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   src.contexts().citerate(
       [&](const Context& c) {
         auto id = c.userdata[src.identifier()];
-        ctxMaxId = std::max(ctxMaxId, id);
         auto x = cs.emplace(id, c);
         assert(x.second && "Context identifiers not unique!");
       },
@@ -123,7 +121,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
 
   // hdr + id_tuples section
   int my_num_prof = src.threads().size();
-  if (rank == 0)
+  if (mpi::World::rank() == 0)
     my_num_prof++;
   uint32_t total_num_prof = mpi::allreduce(my_num_prof, mpi::Op::sum());
   prof_info_sec_ptr = PMS_hdr_SIZE;
@@ -142,8 +140,9 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   obuffers[1].cur_pos = 0;
   cur_obuf_idx = 0;
 
-  fpos += id_tuples_sec_ptr + MULTIPLE_8(id_tuples_sec_size);
-  accFpos.initialize(fpos);  // start the window to keep track of the real file cursor
+  accFpos.initialize(
+      id_tuples_sec_ptr
+      + MULTIPLE_8(id_tuples_sec_size));  // start the window to keep track of the real file cursor
 }
 
 void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
@@ -245,7 +244,7 @@ void SparseDB::write() {
   uint64_t wrt_off = 0;
 
   if (ob.buf.size() != 0) {
-    wrt_off = filePosFetchOp(ob.buf.size());
+    wrt_off = accFpos.fetch_add(ob.buf.size());
     flushOutBuffer(wrt_off, ob);
   }
 
@@ -260,7 +259,7 @@ void SparseDB::write() {
     ctx_nzval_cnts[c.userdata[src.identifier()]] =
         c.userdata[ud].cnt.load(std::memory_order_relaxed);
 
-  if (rank == 0) {
+  if (mpi::World::rank() == 0) {
     // Allocate the blobs needed for the final output
     std::vector<hpcrun_metricVal_t> values;
     std::vector<uint16_t> mids;
@@ -352,7 +351,7 @@ void SparseDB::write() {
         == (values.size() * PMS_vm_pair_SIZE + coffsets.size() * PMS_ctx_pair_SIZE));
 
     // write summary data into the current buffer
-    wrt_off = filePosFetchOp(sparse_metrics_bytes.size());
+    wrt_off = accFpos.fetch_add(sparse_metrics_bytes.size());
     auto pmfi = pmf->open(true, true);
     pmfi.writeat(wrt_off, sparse_metrics_bytes.size(), sparse_metrics_bytes.data());
     pi.offset = wrt_off;
@@ -363,7 +362,7 @@ void SparseDB::write() {
     // footer to show completeness
     // auto pmfi = pmf->open(true, false);
     auto footer_val = PROFDBft;
-    uint64_t footer_off = filePosFetchOp(sizeof(footer_val));
+    uint64_t footer_off = accFpos.fetch_add(sizeof(footer_val));
     pmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
   } else {
     // prepare for cct.db, initiate some worker threads
@@ -621,7 +620,7 @@ void SparseDB::writeIdTuples(std::vector<id_tuple_t>& id_tuples, uint64_t my_off
 
 void SparseDB::workIdTuplesSection() {
   int local_num_prof = src.threads().size();
-  if (rank == 0)
+  if (mpi::World::rank() == 0)
     local_num_prof++;
 
   std::vector<id_tuple_t> id_tuples(local_num_prof);
@@ -646,7 +645,7 @@ void SparseDB::workIdTuplesSection() {
   }
 
   // don't forget the summary id_tuple
-  if (rank == 0) {
+  if (mpi::World::rank() == 0) {
     id_tuple_t idt;
     idt.length = IDTUPLE_SUMMARY_LENGTH;
     idt.ids = (pms_id_t*)malloc(idt.length * sizeof(pms_id_t));
@@ -670,7 +669,7 @@ void SparseDB::workIdTuplesSection() {
   id_tuples_sec_size = mpi::allreduce(local_tuples_size, mpi::Op::sum());
 
   // id_tuple_ptrs now store the number of bytes for each idtuple, exscan to get ptr
-  exscan<uint64_t>(id_tuple_ptrs);
+  std::exclusive_scan(id_tuple_ptrs.begin(), id_tuple_ptrs.end(), id_tuple_ptrs.begin(), 0);
   for (auto& ptr : id_tuple_ptrs) {
     ptr += (my_offset + id_tuples_sec_ptr);
   }
@@ -688,7 +687,7 @@ void SparseDB::workIdTuplesSection() {
 void SparseDB::setMinProfInfoIdx(const int total_num_prof) {
   // find the minimum prof_info_idx of this rank
   min_prof_info_idx = 0;
-  if (rank != 0) {
+  if (mpi::World::rank() != 0) {
     min_prof_info_idx = total_num_prof;
     for (const auto& t : src.threads().iterate()) {
       uint32_t prof_info_idx = t->userdata[src.identifier()] + 1;
@@ -757,17 +756,6 @@ std::vector<char> SparseDB::profBytes(hpcrun_fmt_sparse_metrics_t* sm) {
   return out;
 }
 
-uint64_t SparseDB::filePosFetchOp(uint64_t val) {
-  uint64_t r;
-  if (mpi::World::size() == 1) {  // just talk to its own data
-    r = fpos;
-    fpos += val;
-  } else {  // More than one rank, use RMA
-    r = accFpos.fetch_add(val);
-  }
-  return r;
-}
-
 void SparseDB::flushOutBuffer(uint64_t wrt_off, OutBuffer& ob) {
   auto pmfi = pmf->open(true, true);
   pmfi.writeat(wrt_off, ob.buf.size(), ob.buf.data());
@@ -792,7 +780,7 @@ uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, uint32_t prof_
     flush = true;
 
     size_t my_size = ob.buf.size() + prof_bytes.size();
-    wrt_off = filePosFetchOp(my_size);
+    wrt_off = accFpos.fetch_add(my_size);
   }
   olck.unlock();
 
@@ -845,16 +833,13 @@ uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, uint32_t prof_
 /// CCTDB FOOTER CORRECT, FILE COMPLETE
 //***************************************************************************
 void SparseDB::cctdbSetUp() {
-  size_t world_size = mpi::World::size();
-
   // get context global final offsets for cct.db
   setCtxOffsets();
   buildCtxGroupList();
   updateCtxOffsets();
 
   // each processor gets its first ctx group, except rank 0
-  ctxGrpId = world_size - 1;
-  accCtxGrp.initialize(ctxGrpId);
+  accCtxGrp.initialize(mpi::World::size() - 1);
 
   cmf = util::File(dir / "cct.db", true);
   cmf->synchronize();
@@ -867,10 +852,8 @@ void SparseDB::cctdbSetUp() {
 }
 
 void SparseDB::writeCCTDB() {
-  size_t world_size = mpi::World::size();
-
   // hdr + ctx info
-  if (rank == 0) {
+  if (mpi::World::rank() == 0) {
     writeCMSHdr();
     writeCtxInfoSec();
   }
@@ -880,7 +863,7 @@ void SparseDB::writeCCTDB() {
 
   // footer
   mpi::barrier();
-  if (rank != world_size - 1)
+  if (mpi::World::rank() != mpi::World::size() - 1)
     return;
 
   auto cmfi = cmf->open(true, false);
@@ -905,7 +888,7 @@ void SparseDB::setCtxOffsets() {
   }
 
   // get local offsets
-  exscan<uint64_t>(local_ctx_off);
+  std::exclusive_scan(local_ctx_off.begin(), local_ctx_off.end(), local_ctx_off.begin(), 0);
 
   // sum up local offsets to get global offsets
   ctx_off = mpi::allreduce(local_ctx_off, mpi::Op::sum());
@@ -1480,31 +1463,19 @@ void SparseDB::buildCtxGroupList() {
   ctx_group_list.emplace_back(ctx_off.size() - 1);
 }
 
-uint32_t SparseDB::ctxGrpIdFetch() {
-  uint32_t r;
-  if (mpi::World::size() == 1) {  // just talk to its own data
-    r = ctxGrpId;
-    ctxGrpId++;
-  } else {                       // More than one rank, use RMA
-    r = accCtxGrp.fetch_add(1);  // just increment the index by 1
-  }
-  return r;
-}
-
 void SparseDB::rwAllCtxGroup() {
-  uint32_t idx = rank > 0 ? rank - 1 : ctxGrpIdFetch();
+  uint32_t idx = mpi::World::rank() > 0 ? mpi::World::rank() - 1 : accCtxGrp.fetch_add(1);
   uint32_t num_groups = ctx_group_list.size();
-  std::vector<uint32_t> ctx_ids;
 
   while (idx < num_groups - 1) {
-    ctx_ids.clear();
+    std::vector<uint32_t> ctx_ids;
     auto& start_id = ctx_group_list[idx];
     auto& end_id = ctx_group_list[idx + 1];
     for (uint i = start_id; i < end_id; i++)
       ctx_ids.emplace_back(i);
     rwOneCtxGroup(ctx_ids);
-    idx = ctxGrpIdFetch();  // communicate between processes to get next group => "dynamic" load
-                            // balance
+    idx = accCtxGrp.fetch_add(
+        1);  // communicate between processes to get next group => "dynamic" load balance
   }
 
   parForPd.fill({});  // Make sure the workshare is non-empty
@@ -1512,31 +1483,6 @@ void SparseDB::rwAllCtxGroup() {
 
   parForCtxs.fill({});
   parForCtxs.complete();
-}
-
-void SparseDB::merge(int threads, bool debug) {}
-
-template<typename T> void SparseDB::exscan(std::vector<T>& data) {
-  int n = data.size();
-  int rounds = ceil(std::log2(n));
-  std::vector<T> tmp(n);
-  int p;
-
-  for (int i = 0; i < rounds; i++) {
-    p = (int)pow(2.0, i);
-    //#pragma omp parallel for num_threads(threads)
-    for (int j = 0; j < n; j++)
-      tmp.at(j) = (j < p) ? data.at(j) : data.at(j) + data.at(j - p);
-
-    if (i < rounds - 1)
-      data = tmp;
-  }
-
-  if (n > 0)
-    data[0] = 0;
-  //#pragma omp parallel for num_threads(threads)
-  for (int i = 1; i < n; i++)
-    data[i] = tmp[i - 1];
 }
 
 template<typename T, typename MemberT>

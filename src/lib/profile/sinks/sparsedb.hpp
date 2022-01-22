@@ -92,7 +92,6 @@ public:
 
   void cctdbSetUp();
   void writeCCTDB();
-  void merge(int threads, bool debug);
 
   //***************************************************************************
   // Work with bytes
@@ -115,16 +114,10 @@ private:
 #define MULTIPLE_8(v) ((v + 7) & ~7)
 
   hpctoolkit::stdshim::filesystem::path dir;
-  int team_size;
-  size_t rank;
 
   std::size_t ctxcnt;
   std::vector<std::reference_wrapper<const hpctoolkit::Context>> contexts;
-  unsigned int ctxMaxId;
   hpctoolkit::util::Once contextWavefront;
-
-  // local exscan over a vector of T, value after exscan will be stored in the original vector
-  template<typename T> void exscan(std::vector<T>& data);
 
   // binary search over a vector of T, unlike std::binary_search, which only returns true/false,
   // this returns the idx of found one, SPARSE_ERR as NOT FOUND
@@ -165,7 +158,6 @@ private:
   void writeProfInfos();
 
   // help write profiles in notifyWavefront, notifyThreadFinal, write
-  uint64_t fpos;  // keep track of the real file cursor
   hpctoolkit::mpi::SharedAccumulator accFpos;
 
   struct OutBuffer {
@@ -322,14 +314,12 @@ private:
 
   std::vector<uint32_t> ctx_group_list;  // each number represents the starting ctx id for this
                                          // group
-  uint32_t ctxGrpId;
   hpctoolkit::mpi::SharedAccumulator accCtxGrp;
   hpctoolkit::util::ResettableParallelForEach<ctxRange> parForCtxs;
 
   void handleItemCtxs(ctxRange& cr);
   void rwOneCtxGroup(std::vector<uint32_t>& ctx_ids);
   void buildCtxGroupList();
-  uint32_t ctxGrpIdFetch();
   void rwAllCtxGroup();
 };
 }  // namespace hpctoolkit::sinks
