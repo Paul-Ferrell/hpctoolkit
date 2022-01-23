@@ -833,22 +833,74 @@ uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, uint32_t prof_
 /// CCTDB FOOTER CORRECT, FILE COMPLETE
 //***************************************************************************
 void SparseDB::cctdbSetUp() {
-  // get context global final offsets for cct.db
-  setCtxOffsets();
-  buildCtxGroupList();
-  updateCtxOffsets();
+  // Lay out the cct.db metric data section, last is total size.
+  ctx_off = std::vector<uint64_t>(ctxcnt + 1, 0);
+  for (size_t i = 0; i < ctxcnt; i++) {
+    ctx_off[i] = ctx_nzval_cnts[i] * CMS_val_prof_idx_pair_SIZE;
+    // ????
+    if (mpi::World::rank() == 0 && ctx_nzmids_cnts[i] > 1)
+      ctx_off[i] += ctx_nzmids_cnts[i] * CMS_m_pair_SIZE;
+  }
+  std::exclusive_scan(
+      ctx_off.begin(), ctx_off.end(), ctx_off.begin(),
+      mpi::World::rank() == 0 ? (MULTIPLE_8(ctxcnt * CMS_ctx_info_SIZE)) + CMS_hdr_SIZE : 0);
+  ctx_off = mpi::allreduce(ctx_off, mpi::Op::sum());
 
-  // each processor gets its first ctx group, except rank 0
+  // Divide the contexts into groups of easily distributable sizes
+  ctx_group_list.clear();
+  {
+    ctx_group_list.push_back(0);
+    const uint64_t limit =
+        std::min<uint64_t>(1024ULL * 1024 * 1024 * 3, ctx_off.back() / (3 * mpi::World::size()));
+    uint64_t cursize = 0;
+    for (size_t i = 0; i < ctxcnt; i++) {
+      const uint64_t size = ctx_off[i + 1] - ctx_off[i];
+      if (cursize + size > limit) {
+        ctx_group_list.push_back(i);
+        cursize = 0;
+      }
+      cursize += size;
+    }
+    ctx_group_list.push_back(ctxcnt);
+  }
+
+  // Initialize the ctx group counter, for dynamic distribution
+  // All ranks other than rank 0 get a pre-allocated ctx group
   accCtxGrp.initialize(mpi::World::size() - 1);
 
+  // Pop open the cct.db file, and synchronize.
   cmf = util::File(dir / "cct.db", true);
   cmf->synchronize();
 
-  // get the list of prof_info
-  fillProfInfoList();
+  // Read and parse the Profile Info section of the final profile.db
+  {
+    auto fi = pmf->open(false, false);
+    uint32_t nProf =
+        readAsByte4(fi, HPCPROFILESPARSE_FMT_MagicLen + HPCPROFILESPARSE_FMT_VersionLen);
 
-  // get the ctx_id & ctx_idx pairs for all profiles
-  fillAllProfileCtxIdIdxPairs();
+    // Read the whole section in, skipping over the index 0 summary profile
+    std::vector<char> buf((nProf - 1) * PMS_prof_info_SIZE);
+    fi.readat(PMS_hdr_SIZE + PMS_prof_info_SIZE, buf.size(), buf.data());
+
+    // Parse the section into pms_profile_info_t structures
+    prof_info_list = std::vector<pms_profile_info_t>(nProf - 1);
+    for (uint32_t i = 1; i < nProf; i++) {
+      auto pi = parseProfInfo(&buf[(i - 1) * PMS_prof_info_SIZE]);
+      pi.prof_info_idx = i;
+      prof_info_list[i - 1] = std::move(pi);
+    }
+  }
+
+  // Read and parse the ctx_id/idx pairs for each of the profiles, in parallel
+  {
+    all_prof_ctx_pairs = std::vector<std::vector<PMS_CtxIdIdxPair>>(prof_info_list.size());
+    std::vector<profCtxIdIdxPairs> ciips;
+    ciips.reserve(prof_info_list.size());
+    for (size_t i = 0; i < prof_info_list.size(); i++)
+      ciips.push_back({&all_prof_ctx_pairs[i], &prof_info_list[i]});
+    parForCiip.fill(std::move(ciips));
+    parForCiip.contribute(parForCiip.wait());
+  }
 }
 
 void SparseDB::writeCCTDB() {
@@ -870,35 +922,6 @@ void SparseDB::writeCCTDB() {
   auto footer_off = ctx_off.back();
   uint64_t footer_val = CCTDBftr;
   cmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
-}
-
-//
-// ctx offsets
-//
-void SparseDB::setCtxOffsets() {
-  std::vector<uint64_t> local_ctx_off(ctxcnt + 1, 0);
-
-  // get local sizes
-  for (uint i = 0; i < ctx_nzval_cnts.size(); i++) {
-    local_ctx_off[i] = ctx_nzval_cnts[i] * CMS_val_prof_idx_pair_SIZE;
-    // empty context also has LastMidEnd in ctx_nzmids_cnts, so if the size is 1, offet should not
-    // count that pair for calculation
-    if (mpi::World::rank() == 0 && ctx_nzmids_cnts[i] > 1)
-      local_ctx_off[i] += ctx_nzmids_cnts[i] * CMS_m_pair_SIZE;
-  }
-
-  // get local offsets
-  std::exclusive_scan(local_ctx_off.begin(), local_ctx_off.end(), local_ctx_off.begin(), 0);
-
-  // sum up local offsets to get global offsets
-  ctx_off = mpi::allreduce(local_ctx_off, mpi::Op::sum());
-}
-
-void SparseDB::updateCtxOffsets() {
-  assert(ctx_off.size() == ctxcnt + 1);
-
-  for (uint i = 0; i < ctxcnt + 1; i++)
-    ctx_off[i] += (MULTIPLE_8(ctxcnt * CMS_ctx_info_SIZE)) + CMS_hdr_SIZE;
 }
 
 //
@@ -969,7 +992,7 @@ void SparseDB::writeCtxInfoSec() {
 //
 // helper - gather prof infos
 //
-pms_profile_info_t SparseDB::profInfo(const char* input) {
+pms_profile_info_t SparseDB::parseProfInfo(const char* input) {
   pms_profile_info_t pi;
   pi.id_tuple_ptr = interpretByte8(input);
   pi.metadata_ptr = interpretByte8(input + PMS_id_tuple_ptr_SIZE);
@@ -980,29 +1003,6 @@ pms_profile_info_t SparseDB::profInfo(const char* input) {
   pi.num_nzctxs = interpretByte4(input + PMS_ptrs_SIZE + PMS_num_val_SIZE);
   pi.offset = interpretByte8(input + PMS_ptrs_SIZE + PMS_num_val_SIZE + PMS_num_nzctx_SIZE);
   return pi;
-}
-
-void SparseDB::fillProfInfoList() {
-  auto fhi = pmf->open(false, false);
-
-  // read the number of profiles
-  uint32_t num_prof =
-      readAsByte4(fhi, (HPCPROFILESPARSE_FMT_MagicLen + HPCPROFILESPARSE_FMT_VersionLen));
-  num_prof--;  // minus the summary profile
-
-  // read the whole Profile Information section
-  int count = num_prof * PMS_prof_info_SIZE;
-  char* input = new char[count];
-  fhi.readat(PMS_hdr_SIZE + PMS_prof_info_SIZE, count, input);  // skip one prof_info (summary)
-
-  // interpret the section and store in a vector of pms_profile_info_t
-  prof_info_list.resize(num_prof);
-  for (int i = 0; i < count; i += PMS_prof_info_SIZE) {
-    auto pi = profInfo(input + i);
-    pi.prof_info_idx = i / PMS_prof_info_SIZE + 1;  // the first one is summary profile
-    prof_info_list[i / PMS_prof_info_SIZE] = std::move(pi);
-  }
-  delete[] input;
 }
 
 //
@@ -1036,21 +1036,6 @@ void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
 
   delete[] input;
   *(ciip.prof_ctx_pairs) = std::move(ctx_id_idx_pairs);
-}
-
-void SparseDB::fillAllProfileCtxIdIdxPairs() {
-  all_prof_ctx_pairs.resize(prof_info_list.size());
-  std::vector<profCtxIdIdxPairs> ciips(prof_info_list.size());
-
-  for (uint i = 0; i < prof_info_list.size(); i++) {
-    profCtxIdIdxPairs ciip;
-    ciip.prof_ctx_pairs = &all_prof_ctx_pairs[i];
-    ciip.pi = &prof_info_list[i];
-    ciips[i] = std::move(ciip);
-  }
-
-  parForCiip.fill(std::move(ciips));
-  parForCiip.contribute(parForCiip.wait());
 }
 
 std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
@@ -1410,26 +1395,6 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
   }
   parForCtxs.fill(std::move(crs));
   parForCtxs.reset();
-}
-
-void SparseDB::buildCtxGroupList() {
-  uint64_t cur_size = 0;
-  uint64_t total_size = ctx_off.back();
-  uint64_t size_limit = std::min<uint64_t>(
-      (uint64_t)1024 * 1024 * 1024 * 3, round(total_size / (3 * mpi::World::size())));
-
-  ctx_group_list.emplace_back(0);
-  for (uint i = 0; i < ctx_off.size() - 1; i++) {
-    uint64_t cur_ctx_size = ctx_off[i + 1] - ctx_off[i];
-
-    if ((cur_size + cur_ctx_size) > size_limit) {
-      ctx_group_list.emplace_back(i);
-      cur_size = 0;
-    }
-
-    cur_size += cur_ctx_size;
-  }
-  ctx_group_list.emplace_back(ctx_off.size() - 1);
 }
 
 void SparseDB::rwAllCtxGroup() {

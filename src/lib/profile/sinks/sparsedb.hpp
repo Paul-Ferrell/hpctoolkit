@@ -198,9 +198,6 @@ private:
   // ctx offsets
   std::vector<uint64_t> ctx_off;
 
-  void setCtxOffsets();
-  void updateCtxOffsets();
-
   // hdr
   void writeCMSHdr();
 
@@ -211,8 +208,7 @@ private:
   // helper - gather prof infos
   std::vector<pms_profile_info_t> prof_info_list;
 
-  pms_profile_info_t profInfo(const char* input);
-  void fillProfInfoList();
+  pms_profile_info_t parseProfInfo(const char* input);
 
   // helper - gather ctx id idx pairs
   struct PMS_CtxIdIdxPair {
@@ -224,11 +220,10 @@ private:
     pms_profile_info_t* pi;
   };
   hpctoolkit::util::ParallelForEach<profCtxIdIdxPairs> parForCiip;
-  std::vector<std::vector<SparseDB::PMS_CtxIdIdxPair>> all_prof_ctx_pairs;
+  std::vector<std::vector<PMS_CtxIdIdxPair>> all_prof_ctx_pairs;
 
   PMS_CtxIdIdxPair ctxIdIdxPair(const char* input);
   void handleItemCiip(profCtxIdIdxPairs& ciip);
-  void fillAllProfileCtxIdIdxPairs();
 
   // helper - extract one profile data
   struct profData {
@@ -305,7 +300,6 @@ private:
 
   void handleItemCtxs(ctxRange& cr);
   void rwOneCtxGroup(std::vector<uint32_t>& ctx_ids);
-  void buildCtxGroupList();
   void rwAllCtxGroup();
 };
 }  // namespace hpctoolkit::sinks
