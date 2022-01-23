@@ -93,20 +93,6 @@ public:
   void cctdbSetUp();
   void writeCCTDB();
 
-  //***************************************************************************
-  // Work with bytes
-  //***************************************************************************
-  void writeAsByte4(uint32_t val, hpctoolkit::util::File::Instance& fh, uint64_t off);
-  void writeAsByte8(uint64_t val, hpctoolkit::util::File::Instance& fh, uint64_t off);
-  uint32_t readAsByte4(hpctoolkit::util::File::Instance& fh, uint64_t off);
-  uint64_t readAsByte8(hpctoolkit::util::File::Instance& fh, uint64_t off);
-  uint16_t interpretByte2(const char* input);
-  uint32_t interpretByte4(const char* input);
-  uint64_t interpretByte8(const char* input);
-  std::vector<char> convertToByte2(uint16_t val);
-  std::vector<char> convertToByte4(uint32_t val);
-  std::vector<char> convertToByte8(uint64_t val);
-
 private:
 //***************************************************************************
 // general
@@ -207,8 +193,6 @@ private:
 
   // helper - gather prof infos
   std::vector<pms_profile_info_t> prof_info_list;
-
-  pms_profile_info_t parseProfInfo(const char* input);
 
   // helper - gather ctx id idx pairs
   struct PMS_CtxIdIdxPair {

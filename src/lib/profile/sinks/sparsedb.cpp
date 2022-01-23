@@ -65,6 +65,99 @@
 using namespace hpctoolkit;
 using namespace hpctoolkit::sinks;
 
+static uint32_t readAsByte4(util::File::Instance& fh, uint64_t off) {
+  uint32_t v = 0;
+  int shift = 0, num_reads = 0;
+  char input[4];
+
+  fh.readat(off, 4, input);
+
+  for (shift = 24; shift >= 0; shift -= 8) {
+    v |= ((uint32_t)(input[num_reads] & 0xff) << shift);
+    num_reads++;
+  }
+
+  return v;
+}
+
+static uint16_t interpretByte2(const char* input) {
+  uint16_t v = 0;
+  int shift = 0, num_reads = 0;
+
+  for (shift = 8; shift >= 0; shift -= 8) {
+    v |= ((uint16_t)(input[num_reads] & 0xff) << shift);
+    num_reads++;
+  }
+
+  return v;
+}
+static uint32_t interpretByte4(const char* input) {
+  uint32_t v = 0;
+  int shift = 0, num_reads = 0;
+
+  for (shift = 24; shift >= 0; shift -= 8) {
+    v |= ((uint32_t)(input[num_reads] & 0xff) << shift);
+    num_reads++;
+  }
+
+  return v;
+}
+static uint64_t interpretByte8(const char* input) {
+  uint64_t v = 0;
+  int shift = 0, num_reads = 0;
+
+  for (shift = 56; shift >= 0; shift -= 8) {
+    v |= ((uint64_t)(input[num_reads] & 0xff) << shift);
+    num_reads++;
+  }
+
+  return v;
+}
+
+static std::vector<char> convertToByte2(uint16_t val) {
+  std::vector<char> bytes(2);
+  int shift = 0, num_writes = 0;
+
+  for (shift = 8; shift >= 0; shift -= 8) {
+    bytes[num_writes] = (val >> shift) & 0xff;
+    num_writes++;
+  }
+  return bytes;
+}
+static std::vector<char> convertToByte4(uint32_t val) {
+  std::vector<char> bytes(4);
+  int shift = 0, num_writes = 0;
+
+  for (shift = 24; shift >= 0; shift -= 8) {
+    bytes[num_writes] = (val >> shift) & 0xff;
+    num_writes++;
+  }
+  return bytes;
+}
+static std::vector<char> convertToByte8(uint64_t val) {
+  std::vector<char> bytes(8);
+  int shift = 0, num_writes = 0;
+
+  for (shift = 56; shift >= 0; shift -= 8) {
+    bytes[num_writes] = (val >> shift) & 0xff;
+    num_writes++;
+  }
+  return bytes;
+}
+
+static pms_profile_info_t parseProfInfo(const char* input) {
+  pms_profile_info_t pi;
+  pi.id_tuple_ptr = interpretByte8(input);
+  pi.metadata_ptr = interpretByte8(input + PMS_id_tuple_ptr_SIZE);
+  pi.spare_one = interpretByte8(input + PMS_id_tuple_ptr_SIZE + PMS_metadata_ptr_SIZE);
+  pi.spare_two =
+      interpretByte8(input + PMS_id_tuple_ptr_SIZE + PMS_metadata_ptr_SIZE + PMS_spare_one_SIZE);
+  pi.num_vals = interpretByte8(input + PMS_ptrs_SIZE);
+  pi.num_nzctxs = interpretByte4(input + PMS_ptrs_SIZE + PMS_num_val_SIZE);
+  pi.offset = interpretByte8(input + PMS_ptrs_SIZE + PMS_num_val_SIZE + PMS_num_nzctx_SIZE);
+  return pi;
+}
+
 SparseDB::SparseDB(stdshim::filesystem::path p)
     : dir(std::move(p)), parForPi([&](pms_profile_info_t& item) { handleItemPi(item); }),
       accFpos(mpi::Tag::SparseDB_1),
@@ -376,129 +469,6 @@ void SparseDB::write() {
   try {
     std::ofstream(dir / "FORMATS.md") << FORMATS_md;
   } catch (std::exception& e) { util::log::warning{} << "Error while writing out FORMATS.md file"; }
-}
-
-void SparseDB::writeAsByte4(uint32_t val, util::File::Instance& fh, uint64_t off) {
-  int shift = 0, num_writes = 0;
-  char input[4];
-
-  for (shift = 24; shift >= 0; shift -= 8) {
-    input[num_writes] = (val >> shift) & 0xff;
-    num_writes++;
-  }
-
-  fh.writeat(off, 4, input);
-}
-
-void SparseDB::writeAsByte8(uint64_t val, util::File::Instance& fh, uint64_t off) {
-  int shift = 0, num_writes = 0;
-  char input[8];
-
-  for (shift = 56; shift >= 0; shift -= 8) {
-    input[num_writes] = (val >> shift) & 0xff;
-    num_writes++;
-  }
-
-  fh.writeat(off, 8, input);
-}
-
-uint32_t SparseDB::readAsByte4(util::File::Instance& fh, uint64_t off) {
-  uint32_t v = 0;
-  int shift = 0, num_reads = 0;
-  char input[4];
-
-  fh.readat(off, 4, input);
-
-  for (shift = 24; shift >= 0; shift -= 8) {
-    v |= ((uint32_t)(input[num_reads] & 0xff) << shift);
-    num_reads++;
-  }
-
-  return v;
-}
-
-uint64_t SparseDB::readAsByte8(util::File::Instance& fh, uint64_t off) {
-  uint32_t v = 0;
-  int shift = 0, num_reads = 0;
-  char input[8];
-
-  fh.readat(off, 8, input);
-
-  for (shift = 56; shift >= 0; shift -= 8) {
-    v |= ((uint64_t)(input[num_reads] & 0xff) << shift);
-    num_reads++;
-  }
-
-  return v;
-}
-
-uint16_t SparseDB::interpretByte2(const char* input) {
-  uint16_t v = 0;
-  int shift = 0, num_reads = 0;
-
-  for (shift = 8; shift >= 0; shift -= 8) {
-    v |= ((uint16_t)(input[num_reads] & 0xff) << shift);
-    num_reads++;
-  }
-
-  return v;
-}
-
-uint32_t SparseDB::interpretByte4(const char* input) {
-  uint32_t v = 0;
-  int shift = 0, num_reads = 0;
-
-  for (shift = 24; shift >= 0; shift -= 8) {
-    v |= ((uint32_t)(input[num_reads] & 0xff) << shift);
-    num_reads++;
-  }
-
-  return v;
-}
-
-uint64_t SparseDB::interpretByte8(const char* input) {
-  uint64_t v = 0;
-  int shift = 0, num_reads = 0;
-
-  for (shift = 56; shift >= 0; shift -= 8) {
-    v |= ((uint64_t)(input[num_reads] & 0xff) << shift);
-    num_reads++;
-  }
-
-  return v;
-}
-
-std::vector<char> SparseDB::convertToByte2(uint16_t val) {
-  std::vector<char> bytes(2);
-  int shift = 0, num_writes = 0;
-
-  for (shift = 8; shift >= 0; shift -= 8) {
-    bytes[num_writes] = (val >> shift) & 0xff;
-    num_writes++;
-  }
-  return bytes;
-}
-
-std::vector<char> SparseDB::convertToByte4(uint32_t val) {
-  std::vector<char> bytes(4);
-  int shift = 0, num_writes = 0;
-
-  for (shift = 24; shift >= 0; shift -= 8) {
-    bytes[num_writes] = (val >> shift) & 0xff;
-    num_writes++;
-  }
-  return bytes;
-}
-
-std::vector<char> SparseDB::convertToByte8(uint64_t val) {
-  std::vector<char> bytes(8);
-  int shift = 0, num_writes = 0;
-
-  for (shift = 56; shift >= 0; shift -= 8) {
-    bytes[num_writes] = (val >> shift) & 0xff;
-    num_writes++;
-  }
-  return bytes;
 }
 
 //***************************************************************************
@@ -987,22 +957,6 @@ void SparseDB::writeCtxInfoSec() {
   assert(info_bytes.size() == CMS_ctx_info_SIZE * ctxcnt);
   auto cct_major_fi = cmf->open(true, true);
   cct_major_fi.writeat(CMS_hdr_SIZE, info_bytes.size(), info_bytes.data());
-}
-
-//
-// helper - gather prof infos
-//
-pms_profile_info_t SparseDB::parseProfInfo(const char* input) {
-  pms_profile_info_t pi;
-  pi.id_tuple_ptr = interpretByte8(input);
-  pi.metadata_ptr = interpretByte8(input + PMS_id_tuple_ptr_SIZE);
-  pi.spare_one = interpretByte8(input + PMS_id_tuple_ptr_SIZE + PMS_metadata_ptr_SIZE);
-  pi.spare_two =
-      interpretByte8(input + PMS_id_tuple_ptr_SIZE + PMS_metadata_ptr_SIZE + PMS_spare_one_SIZE);
-  pi.num_vals = interpretByte8(input + PMS_ptrs_SIZE);
-  pi.num_nzctxs = interpretByte4(input + PMS_ptrs_SIZE + PMS_num_val_SIZE);
-  pi.offset = interpretByte8(input + PMS_ptrs_SIZE + PMS_num_val_SIZE + PMS_num_nzctx_SIZE);
-  return pi;
 }
 
 //
