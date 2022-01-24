@@ -114,34 +114,47 @@ static uint64_t interpretByte8(const char* input) {
   return v;
 }
 
-static std::vector<char> convertToByte2(uint16_t val) {
-  std::vector<char> bytes(2);
+static char* insertByte2(char* bytes, uint16_t val) {
   int shift = 0, num_writes = 0;
 
   for (shift = 8; shift >= 0; shift -= 8) {
     bytes[num_writes] = (val >> shift) & 0xff;
     num_writes++;
   }
-  return bytes;
+  return bytes + 2;
 }
-static std::vector<char> convertToByte4(uint32_t val) {
-  std::vector<char> bytes(4);
+static char* insertByte4(char* bytes, uint32_t val) {
   int shift = 0, num_writes = 0;
 
   for (shift = 24; shift >= 0; shift -= 8) {
     bytes[num_writes] = (val >> shift) & 0xff;
     num_writes++;
   }
-  return bytes;
+  return bytes + 4;
 }
-static std::vector<char> convertToByte8(uint64_t val) {
-  std::vector<char> bytes(8);
+static char* insertByte8(char* bytes, uint64_t val) {
   int shift = 0, num_writes = 0;
 
   for (shift = 56; shift >= 0; shift -= 8) {
     bytes[num_writes] = (val >> shift) & 0xff;
     num_writes++;
   }
+  return bytes + 8;
+}
+
+static std::vector<char> convertToByte2(uint16_t val) {
+  std::vector<char> bytes(2);
+  insertByte2(bytes.data(), val);
+  return bytes;
+}
+static std::vector<char> convertToByte4(uint32_t val) {
+  std::vector<char> bytes(4);
+  insertByte4(bytes.data(), val);
+  return bytes;
+}
+static std::vector<char> convertToByte8(uint64_t val) {
+  std::vector<char> bytes(8);
+  insertByte8(bytes.data(), val);
   return bytes;
 }
 
@@ -156,6 +169,28 @@ static pms_profile_info_t parseProfInfo(const char* input) {
   pi.num_nzctxs = interpretByte4(input + PMS_ptrs_SIZE + PMS_num_val_SIZE);
   pi.offset = interpretByte8(input + PMS_ptrs_SIZE + PMS_num_val_SIZE + PMS_num_nzctx_SIZE);
   return pi;
+}
+
+static std::array<char, CMS_real_hdr_SIZE> composeCtxHdr(uint32_t ctxcnt) {
+  std::array<char, CMS_real_hdr_SIZE> out;
+  char* cur = out.data();
+  cur = std::copy(HPCCCTSPARSE_FMT_Magic, HPCCCTSPARSE_FMT_Magic + HPCCCTSPARSE_FMT_MagicLen, cur);
+  *(cur++) = HPCCCTSPARSE_FMT_VersionMajor;
+  *(cur++) = HPCCCTSPARSE_FMT_VersionMinor;
+
+  cur = insertByte4(cur, ctxcnt);                      // num_ctx
+  cur = insertByte2(cur, HPCCCTSPARSE_FMT_NumSec);     // num_sec
+  cur = insertByte8(cur, ctxcnt * CMS_ctx_info_SIZE);  // ci_size
+  cur = insertByte8(cur, CMS_hdr_SIZE);                // ci_ptr
+  return out;
+}
+
+static char* insertCtxInfo(char* cur, cms_ctx_info_t ci) {
+  cur = insertByte4(cur, ci.ctx_id);
+  cur = insertByte8(cur, ci.num_vals);
+  cur = insertByte2(cur, ci.num_nzmids);
+  cur = insertByte8(cur, ci.offset);
+  return cur;
 }
 
 SparseDB::SparseDB(stdshim::filesystem::path p)
@@ -875,10 +910,31 @@ void SparseDB::cctdbSetUp() {
 }
 
 void SparseDB::writeCCTDB() {
-  // hdr + ctx info
   if (mpi::World::rank() == 0) {
-    writeCMSHdr();
-    writeCtxInfoSec();
+    // Rank 0 is in charge of writing the header and context info sections
+    auto cmfi = cmf->open(true, true);
+
+    auto hdr = composeCtxHdr(ctxcnt);
+    cmfi.writeat(0, hdr.size(), hdr.data());
+
+    std::vector<char> buf(ctxcnt * CMS_ctx_info_SIZE);
+    char* cur = buf.data();
+    for (uint32_t i = 0; i < ctxcnt; i++) {
+      uint16_t num_nzmids = ctx_nzmids_cnts[i] - 1;
+      uint64_t num_vals = num_nzmids == 0
+                            ? 0
+                            : (ctx_off[i + 1] - ctx_off[i] - (num_nzmids + 1) * CMS_m_pair_SIZE)
+                                  / CMS_val_prof_idx_pair_SIZE;
+      assert(num_vals == ctx_nzval_cnts[i]);
+      cur = insertCtxInfo(
+          cur, {
+                   .ctx_id = i,
+                   .num_vals = num_vals,
+                   .num_nzmids = num_nzmids,
+                   .offset = ctx_off[i],
+               });
+    }
+    cmfi.writeat(CMS_hdr_SIZE, buf.size(), buf.data());
   }
 
   // read and write all the context groups I(rank) am responsible for
@@ -893,71 +949,6 @@ void SparseDB::writeCCTDB() {
   auto footer_off = ctx_off.back();
   uint64_t footer_val = CCTDBftr;
   cmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
-}
-
-//
-// hdr
-//
-void SparseDB::writeCMSHdr() {
-  std::vector<char> hdr;
-  hdr.insert(hdr.end(), HPCCCTSPARSE_FMT_Magic, HPCCCTSPARSE_FMT_Magic + HPCCCTSPARSE_FMT_MagicLen);
-  hdr.emplace_back(HPCCCTSPARSE_FMT_VersionMajor);
-  hdr.emplace_back(HPCCCTSPARSE_FMT_VersionMinor);
-
-  auto b = convertToByte4(ctxcnt);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  b = convertToByte2(HPCCCTSPARSE_FMT_NumSec);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  b = convertToByte8(ctxcnt * CMS_ctx_info_SIZE);  // ctx_info_sec_size
-  hdr.insert(hdr.end(), b.begin(), b.end());
-  b = convertToByte8(CMS_hdr_SIZE);  // ctx_info_sec_ptr
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  assert(hdr.size() == CMS_real_hdr_SIZE);
-
-  auto cct_major_fi = cmf->open(true, true);
-  cct_major_fi.writeat(0, CMS_real_hdr_SIZE, hdr.data());
-}
-
-//
-// ctx info
-//
-std::vector<char> SparseDB::ctxInfoBytes(const cms_ctx_info_t& ctx_info) {
-  std::vector<char> bytes;
-
-  auto b = convertToByte4(ctx_info.ctx_id);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-  b = convertToByte8(ctx_info.num_vals);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-  b = convertToByte2(ctx_info.num_nzmids);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-  b = convertToByte8(ctx_info.offset);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-
-  return bytes;
-}
-
-void SparseDB::writeCtxInfoSec() {
-  assert(ctx_nzmids_cnts.size() == ctxcnt);
-  std::vector<char> info_bytes;
-
-  for (uint i = 0; i < ctxcnt; i++) {
-    uint16_t num_nzmids = (uint16_t)(ctx_nzmids_cnts[i] - 1);
-    uint64_t num_vals = (num_nzmids == 0)
-                          ? 0
-                          : ((ctx_off[i + 1] - ctx_off[i]) - (num_nzmids + 1) * CMS_m_pair_SIZE)
-                                / CMS_val_prof_idx_pair_SIZE;
-    cms_ctx_info_t ci = {i, num_vals, num_nzmids, ctx_off[i]};
-
-    auto bytes = std::move(ctxInfoBytes(ci));
-    info_bytes.insert(info_bytes.end(), bytes.begin(), bytes.end());
-  }
-
-  assert(info_bytes.size() == CMS_ctx_info_SIZE * ctxcnt);
-  auto cct_major_fi = cmf->open(true, true);
-  cct_major_fi.writeat(CMS_hdr_SIZE, info_bytes.size(), info_bytes.data());
 }
 
 void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {

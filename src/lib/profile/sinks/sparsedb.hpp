@@ -181,13 +181,6 @@ private:
   // ctx offsets
   std::vector<uint64_t> ctx_off;
 
-  // hdr
-  void writeCMSHdr();
-
-  // ctx info
-  std::vector<char> ctxInfoBytes(const cms_ctx_info_t& ctx_info);
-  void writeCtxInfoSec();
-
   // helper - gather prof infos
   std::vector<pms_profile_info_t> prof_info_list;
 
