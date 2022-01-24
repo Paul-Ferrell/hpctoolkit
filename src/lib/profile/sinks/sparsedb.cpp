@@ -903,7 +903,7 @@ void SparseDB::cctdbSetUp() {
     std::vector<profCtxIdIdxPairs> ciips;
     ciips.reserve(prof_info_list.size());
     for (size_t i = 0; i < prof_info_list.size(); i++)
-      ciips.push_back({&all_prof_ctx_pairs[i], &prof_info_list[i]});
+      ciips.push_back({all_prof_ctx_pairs[i], prof_info_list[i]});
     parForCiip.fill(std::move(ciips));
     parForCiip.contribute(parForCiip.wait());
   }
@@ -951,7 +951,7 @@ void SparseDB::writeCCTDB() {
 }
 
 void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
-  const auto& pi = *ciip.pi;
+  const auto& pi = ciip.pi.get();
   if (pi.num_nzctxs == 0) {
     // No data in this profile, skip
     return;
@@ -963,10 +963,11 @@ void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
   pmfi.readat(pi.offset + pi.num_vals * PMS_vm_pair_SIZE, buf.size(), buf.data());
 
   // Parse and save in the output
-  ciip.prof_ctx_pairs->reserve(pi.num_nzctxs + 1);
+  auto& prof_ctx_pairs = ciip.prof_ctx_pairs.get();
+  prof_ctx_pairs.reserve(pi.num_nzctxs + 1);
   for (uint32_t i = 0; i < pi.num_nzctxs + 1; i++) {
     const char* cur = &buf[i * PMS_ctx_pair_SIZE];
-    ciip.prof_ctx_pairs->emplace_back(interpretByte4(cur), interpretByte8(cur + PMS_ctx_id_SIZE));
+    prof_ctx_pairs.emplace_back(interpretByte4(cur), interpretByte8(cur + PMS_ctx_id_SIZE));
   }
 }
 

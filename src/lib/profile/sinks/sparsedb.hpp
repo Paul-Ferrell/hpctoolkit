@@ -186,8 +186,8 @@ private:
 
   // helper - gather ctx id idx pairs
   struct profCtxIdIdxPairs {
-    std::vector<std::pair<uint32_t, uint64_t>>* prof_ctx_pairs;
-    pms_profile_info_t* pi;
+    std::reference_wrapper<std::vector<std::pair<uint32_t, uint64_t>>> prof_ctx_pairs;
+    std::reference_wrapper<const pms_profile_info_t> pi;
   };
   hpctoolkit::util::ParallelForEach<profCtxIdIdxPairs> parForCiip;
   std::vector<std::vector<std::pair<uint32_t, uint64_t>>> all_prof_ctx_pairs;
