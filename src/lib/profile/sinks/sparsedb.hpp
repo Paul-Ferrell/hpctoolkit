@@ -221,15 +221,6 @@ private:
     std::map<uint16_t, MetricValBlock> metrics;
   };
 
-  MetricValBlock
-  metValBloc(const hpcrun_metricVal_t val, const uint16_t mid, const uint32_t prof_idx);
-  void updateCtxMetBloc(
-      const hpcrun_metricVal_t val, const uint16_t mid, const uint32_t prof_idx,
-      CtxMetricBlock& cmb);
-  void interpretValMidsBytes(
-      const char* vminput, const uint32_t prof_idx, const std::pair<uint32_t, uint64_t>& ctx_pair,
-      const uint64_t next_ctx_idx, const uint64_t first_ctx_idx, CtxMetricBlock& cmb);
-
   // helper - convert CtxMetricBlocks to correct bytes for writing
   std::vector<char> mvbBytes(const MetricValBlock& mvb);
   std::vector<char> mvbsBytes(std::map<uint16_t, MetricValBlock>& metrics);

@@ -1019,51 +1019,6 @@ void SparseDB::handleItemPd(profData& pd) {
 }
 
 //
-// helper - convert one profile data to a CtxMetricBlock
-//
-SparseDB::MetricValBlock
-SparseDB::metValBloc(const hpcrun_metricVal_t val, const uint16_t mid, const uint32_t prof_idx) {
-  MetricValBlock mvb;
-  mvb.mid = mid;
-  std::vector<std::pair<hpcrun_metricVal_t, uint32_t>> values_prof_idxs;
-  values_prof_idxs.emplace_back(val, prof_idx);
-  mvb.values_prof_idxs = values_prof_idxs;
-  return mvb;
-}
-
-void SparseDB::updateCtxMetBloc(
-    const hpcrun_metricVal_t val, const uint16_t mid, const uint32_t prof_idx,
-    CtxMetricBlock& cmb) {
-  // find if this mid exists
-  auto& metric_blocks = cmb.metrics;
-  auto it = metric_blocks.find(mid);
-
-  if (it != metric_blocks.end())  // found mid
-    it->second.values_prof_idxs.emplace_back(val, prof_idx);
-  else
-    metric_blocks.emplace(mid, std::move(metValBloc(val, mid, prof_idx)));
-}
-
-void SparseDB::interpretValMidsBytes(
-    const char* vminput, const uint32_t prof_idx, const std::pair<uint32_t, uint64_t>& ctx_pair,
-    const uint64_t next_ctx_idx, const uint64_t first_ctx_idx, CtxMetricBlock& cmb) {
-  uint32_t ctx_id = ctx_pair.first;
-  uint64_t ctx_idx = ctx_pair.second;
-  uint64_t num_val_this_ctx = next_ctx_idx - ctx_idx;
-  assert(cmb.ctx_id == ctx_id);
-
-  const char* ctx_met_input = vminput + (PMS_val_SIZE + PMS_mid_SIZE) * (ctx_idx - first_ctx_idx);
-  for (uint i = 0; i < num_val_this_ctx; i++) {
-    hpcrun_metricVal_t val;
-    val.bits = interpretByte8(ctx_met_input);
-    uint16_t mid = interpretByte2(ctx_met_input + PMS_val_SIZE);
-
-    updateCtxMetBloc(val, mid, prof_idx, cmb);
-    ctx_met_input += (PMS_val_SIZE + PMS_mid_SIZE);
-  }
-}
-
-//
 // helper - convert CtxMetricBlocks to correct bytes for writing
 //
 std::vector<char> SparseDB::mvbBytes(const MetricValBlock& mvb) {
@@ -1204,8 +1159,16 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
 
       // Fill cmb with metric/value pairs for this context, from the top profile
       const auto& [prof_info_idx, first_idx, vmblob] = heap.back().second;
-      interpretValMidsBytes(
-          vmblob.get().data(), prof_info_idx, cur_pair, heap.back().first->second, first_idx, cmb);
+      const char* cur = &vmblob.get()[(cur_pair.second - first_idx) * PMS_vm_pair_SIZE];
+      for (uint64_t i = 0, e = heap.back().first->second - cur_pair.second; i < e;
+           i++, cur += PMS_vm_pair_SIZE) {
+        hpcrun_metricVal_t val;
+        val.bits = interpretByte8(cur);
+        uint16_t mid = interpretByte2(cur + PMS_val_SIZE);
+
+        auto [it, first] = cmb.metrics.try_emplace(mid, MetricValBlock{.mid = mid});
+        it->second.values_prof_idxs.emplace_back(val, prof_info_idx);
+      }
 
       // If the updated entry is still in range, push it back into the heap.
       // Otherwise pop the entry from the vector completely.
