@@ -1063,7 +1063,8 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
   std::vector<char> buf;
   while (!heap.empty() && heap.front().first->first < cr.last_ctx) {
     const uint32_t ctx_id = heap.front().first->first;
-    std::map<uint16_t, std::vector<std::pair<hpcrun_metricVal_t, uint32_t>>> values;
+    std::map<uint16_t, std::vector<char>> valuebufs;
+    uint64_t allpvs = 0;
 
     // Pull the data out for one context and save it to cmb
     while (heap.front().first->first == ctx_id) {
@@ -1076,12 +1077,15 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
       const char* cur = &vmblob.get()[(cur_pair.second - first_idx) * PMS_vm_pair_SIZE];
       for (uint64_t i = 0, e = heap.back().first->second - cur_pair.second; i < e;
            i++, cur += PMS_vm_pair_SIZE) {
-        hpcrun_metricVal_t val;
-        val.bits = interpretByte8(cur);
-        uint16_t mid = interpretByte2(cur + PMS_val_SIZE);
+        allpvs++;
+        const uint16_t mid = interpretByte2(cur + PMS_val_SIZE);
+        auto& subbuf = valuebufs.try_emplace(mid).first->second;
 
-        auto [it, first] = values.try_emplace(mid);
-        it->second.emplace_back(val, prof_info_idx);
+        // Write in this prof_idx/value pair, in bytes.
+        // Values are represented the same so they can just be copied.
+        subbuf.reserve(subbuf.size() + CMS_val_prof_idx_pair_SIZE);
+        subbuf.insert(subbuf.end(), cur, cur + PMS_val_SIZE);
+        insertByte4(&*subbuf.insert(subbuf.end(), CMS_prof_idx_SIZE, 0), prof_info_idx);
       }
 
       // If the updated entry is still in range, push it back into the heap.
@@ -1092,41 +1096,33 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
         heap.pop_back();
     }
 
-#ifndef NDEBUG
-    const auto oldsz = buf.size();
-#endif
+    // Allocate enough space in buf for all the bits we want.
+    const auto newsz =
+        allpvs * CMS_val_prof_idx_pair_SIZE + (valuebufs.size() + 1) * CMS_m_pair_SIZE;
+    assert(
+        ctx_off[ctx_id] + newsz == ctx_off[ctx_id + 1]
+        && "Final layout doesn't match precalculated ctx_off!");
+    buf.reserve(buf.size() + newsz);
 
-    // Construct the prof_idx/value pairs for this context, in bytes
-    for (const auto& [mid, pvs] : values) {
-      for (const auto& [val, prof_idx] : pvs) {
-        auto b = convertToByte8(val.bits);
-        buf.insert(buf.end(), b.begin(), b.end());
-        b = convertToByte4(prof_idx);
-        buf.insert(buf.end(), b.begin(), b.end());
-      }
-    }
+    // Concatinate the prof_idx/value pairs, in bytes form, in metric order
+    for (const auto& [mid, pvbuf] : valuebufs)
+      buf.insert(buf.end(), pvbuf.begin(), pvbuf.end());
 
     // Construct the metric_id/idx pairs for this context, in bytes
     {
-      uint64_t idx = 0;
-      for (const auto& [mid, pvs] : values) {
-        auto b = convertToByte2(mid);
-        buf.insert(buf.end(), b.begin(), b.end());
-        b = convertToByte8(idx);
-        buf.insert(buf.end(), b.begin(), b.end());
-        idx += pvs.size();
+      char* cur = &*buf.insert(buf.end(), (valuebufs.size() + 1) * CMS_m_pair_SIZE, 0);
+      uint64_t pvs = 0;
+      for (const auto& [mid, pvbuf] : valuebufs) {
+        cur = insertByte2(cur, mid);
+        cur = insertByte8(cur, pvs);
+        pvs += pvbuf.size() / CMS_val_prof_idx_pair_SIZE;
       }
+      assert(pvs == allpvs);
 
       // Last entry is always LastMidEnd
-      auto b = convertToByte2(LastMidEnd);
-      buf.insert(buf.end(), b.begin(), b.end());
-      b = convertToByte8(idx);
-      buf.insert(buf.end(), b.begin(), b.end());
+      cur = insertByte2(cur, LastMidEnd);
+      cur = insertByte8(cur, pvs);
     }
-
-    assert(
-        buf.size() - oldsz + ctx_off[ctx_id] == ctx_off[ctx_id + 1]
-        && "Final layout doesn't match ctx_off!");
   }
 
   // Write out the whole blob of data where it belongs in the file
