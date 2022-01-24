@@ -972,11 +972,10 @@ void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
 }
 
 std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
-    const std::vector<uint32_t>& ctx_ids,
+    std::pair<uint32_t, uint32_t> ctx_range,
     const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs) {
-  if (profile_ctx_pairs.size() <= 1 || ctx_ids.empty())
+  if (profile_ctx_pairs.size() <= 1 || ctx_range.first >= ctx_range.second)
     return {};
-  assert(std::is_sorted(ctx_ids.begin(), ctx_ids.end()));
 
   // Wrapper iterator to view the first element of a pair
   using ci_pair = std::pair<uint32_t, uint64_t>;
@@ -995,21 +994,21 @@ std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
   // LastNodeEnd, so we skip it here.
   std::vector<ci_pair>::const_iterator curIn;
   const auto lastIn = --profile_ctx_pairs.end();
-  auto curTarget = ctx_ids.begin();
-  const auto lastTarget = ctx_ids.end();
+  auto curTarget = ctx_range.first;
+  const auto lastTarget = ctx_range.second;
 
   // Binary search down to the first ctx_id we want to extract...
   curIn =
-      std::lower_bound(ctx_id_it(profile_ctx_pairs.begin()), ctx_id_it(lastIn), ctx_ids.front());
+      std::lower_bound(ctx_id_it(profile_ctx_pairs.begin()), ctx_id_it(lastIn), ctx_range.first);
 
   // ...And then use normal iteration to find the others, until we run out.
   std::vector<ci_pair> out;
   while (curIn != lastIn && curTarget != lastTarget) {
-    if (curIn->first < *curTarget)
+    if (curIn->first < curTarget)
       ++curIn;
-    else if (curIn->first > *curTarget)
+    else if (curIn->first > curTarget)
       ++curTarget;
-    else {  // curIn->first == *curTarget
+    else {  // curIn->first == curTarget
       out.emplace_back(*curIn);
       ++curIn;
       ++curTarget;
@@ -1018,14 +1017,12 @@ std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
 
   // Last pair is always LastNodeEnd
   out.emplace_back(LastNodeEnd, curIn->second);
-
-  assert(out.size() <= ctx_ids.size() + 1);
   return out;
 }
 
 void SparseDB::handleItemPd(profData& pd) {
   // Extract the ctx_id/idx pairs that we need for this blob
-  auto pairs = filterCtxPairs(pd.ctx_ids, pd.prof_ctx_pairs);
+  auto pairs = filterCtxPairs(pd.ctx_range, pd.prof_ctx_pairs);
 
   // Read the blob of data containing all our pairs
   std::vector<char> blob;
@@ -1253,8 +1250,8 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
   cmfi.writeat(ctx_off[first_ctx_id], buf.size(), buf.data());
 }
 
-void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
-  if (ctx_ids.empty())
+void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
+  if (first_ctx >= last_ctx)
     return;
 
   // Read the blob of data we need from each profile
@@ -1271,7 +1268,7 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
           .profile_data = profiles_data[i],
           .pi = prof_info_list[i],
           .prof_ctx_pairs = all_prof_ctx_pairs[i],
-          .ctx_ids = ctx_ids,
+          .ctx_range = {first_ctx, last_ctx},
       });
     }
     parForPd.fill(std::move(pds));
@@ -1282,9 +1279,9 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
   std::vector<ctxRange> crs;
   {
     crs.reserve(src.teamSize());
-    const size_t target = (ctx_off[ctx_ids.back() + 1] - ctx_off[ctx_ids.front()]) / src.teamSize();
+    const size_t target = (ctx_off[last_ctx] - ctx_off[first_ctx]) / src.teamSize();
     size_t cursize = 0;
-    for (const uint32_t id : ctx_ids) {
+    for (uint32_t id = first_ctx; id < last_ctx; id++) {
       // Stop allocating once we have nearly enough ranges
       if (crs.size() + 1 == src.teamSize())
         break;
@@ -1292,7 +1289,7 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
       cursize += ctx_off[id + 1] - ctx_off[id];
       if (cursize > target) {
         crs.push_back({
-            .first_ctx = !crs.empty() ? crs.back().last_ctx : ctx_ids.front(),
+            .first_ctx = !crs.empty() ? crs.back().last_ctx : first_ctx,
             .last_ctx = id + 1,
             .pd = profiles_data,
             .pis = prof_info_list,
@@ -1300,11 +1297,11 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
         cursize = 0;
       }
     }
-    if (crs.empty() || crs.back().last_ctx <= ctx_ids.back()) {
+    if (crs.empty() || crs.back().last_ctx < last_ctx) {
       // Last range takes whatever remains
       crs.push_back({
-          .first_ctx = !crs.empty() ? crs.back().last_ctx : ctx_ids.front(),
-          .last_ctx = ctx_ids.back() + 1,
+          .first_ctx = !crs.empty() ? crs.back().last_ctx : first_ctx,
+          .last_ctx = last_ctx,
           .pd = profiles_data,
           .pis = prof_info_list,
       });
@@ -1321,12 +1318,7 @@ void SparseDB::rwAllCtxGroup() {
   uint32_t num_groups = ctx_group_list.size();
 
   while (idx < num_groups - 1) {
-    std::vector<uint32_t> ctx_ids;
-    auto& start_id = ctx_group_list[idx];
-    auto& end_id = ctx_group_list[idx + 1];
-    for (uint i = start_id; i < end_id; i++)
-      ctx_ids.emplace_back(i);
-    rwOneCtxGroup(ctx_ids);
+    rwOneCtxGroup(ctx_group_list[idx], ctx_group_list[idx + 1]);
     idx = accCtxGrp.fetch_add(
         1);  // communicate between processes to get next group => "dynamic" load balance
   }

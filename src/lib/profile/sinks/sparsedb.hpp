@@ -200,12 +200,12 @@ private:
         profile_data;
     std::reference_wrapper<const pms_profile_info_t> pi;
     std::reference_wrapper<const std::vector<std::pair<uint32_t, uint64_t>>> prof_ctx_pairs;
-    std::reference_wrapper<const std::vector<uint32_t>> ctx_ids;
+    std::pair<uint32_t, uint32_t> ctx_range;
   };
   hpctoolkit::util::ResettableParallelForEach<profData> parForPd;
 
   std::vector<std::pair<uint32_t, uint64_t>> filterCtxPairs(
-      const std::vector<uint32_t>& ctx_ids,
+      std::pair<uint32_t, uint32_t> ctx_range,
       const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs);
 
   void handleItemPd(profData& pd);
@@ -252,7 +252,7 @@ private:
   hpctoolkit::util::ResettableParallelForEach<ctxRange> parForCtxs;
 
   void handleItemCtxs(ctxRange& cr);
-  void rwOneCtxGroup(std::vector<uint32_t>& ctx_ids);
+  void rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx);
   void rwAllCtxGroup();
 };
 }  // namespace hpctoolkit::sinks
