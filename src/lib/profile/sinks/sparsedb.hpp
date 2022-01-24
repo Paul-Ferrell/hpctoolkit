@@ -236,28 +236,13 @@ private:
   std::vector<char> metIdIdxPairsBytes(const std::map<uint16_t, MetricValBlock>& metrics);
   std::vector<char> cmbBytes(const CtxMetricBlock& cmb, const uint32_t& ctx_id);
 
-  // write contexts
-  struct nextCtx {
-    uint32_t ctx_id;
-    uint32_t prof_idx;
-    size_t cursor;
-
-    // turn MaxHeap to MinHeap
-    bool operator<(const nextCtx& a) const {
-      if (ctx_id == a.ctx_id)
-        return prof_idx > a.prof_idx;
-      return ctx_id > a.ctx_id;
-    }
-  };
-
   struct ctxRange {
-    uint64_t start;
-    uint64_t end;
+    uint32_t first_ctx;
+    uint32_t last_ctx;
 
     std::reference_wrapper<
         const std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>>
         pd;
-    std::reference_wrapper<const std::vector<uint32_t>> ctx_ids;
     std::reference_wrapper<const std::vector<pms_profile_info_t>> pis;
   };
 

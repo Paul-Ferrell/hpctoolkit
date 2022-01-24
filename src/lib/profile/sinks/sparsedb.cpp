@@ -1177,77 +1177,80 @@ std::vector<char> SparseDB::cmbBytes(const CtxMetricBlock& cmb, const uint32_t& 
 // write contexts
 //
 void SparseDB::handleItemCtxs(ctxRange& cr) {
-  auto ofhi = cmf->open(true, true);
-  std::vector<char> ctxRangeBytes;
+  assert(cr.first_ctx < cr.last_ctx && "Empty ctxRange?");
 
-  uint my_start = cr.start;
-  uint my_end = cr.end;
-  const auto& profiles_data = cr.pd.get();
-  const auto& ctx_ids = cr.ctx_ids.get();
-  const auto& prof_info = cr.pis.get();
+  // Set up a heap with cursors into each profile's data blob
+  std::vector<std::pair<
+      std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,  // ctx_id/idx pair in a profile
+      std::tuple<
+          uint32_t,  // Absolute index of the profile
+          uint64_t,  // Starting index of the profile's data blob
+          std::reference_wrapper<const std::vector<char>>  // Profile's data blob
+          >>>
+      heap;
+  const auto heap_comp = [](const auto& a, const auto& b) {
+    // The "largest" heap entry has the smallest ctx id or profile index
+    return a.first->first != b.first->first ? a.first->first > b.first->first
+                                            : std::get<0>(a.second) > std::get<0>(b.second);
+  };
+  heap.reserve(cr.pd.get().size());
+  for (size_t i = 0; i < cr.pd.get().size(); i++) {
+    const auto& [ctx_id_idx_pairs, vmblob] = cr.pd.get()[i];
+    if (ctx_id_idx_pairs.empty())
+      continue;  // Profile is empty, skip
 
-  if (my_start < my_end) {
-    // each thread sets up a heap to store <ctx_id, profile_idx, profile_cursor> for each profile
-    std::vector<nextCtx> heap;
-    heap.reserve(profiles_data.size());
-    for (uint i = 0; i < profiles_data.size(); i++) {
-      uint32_t ctx_id = ctx_ids[my_start];
-      auto& ctx_id_idx_pairs = profiles_data[i].first;
-      if (ctx_id_idx_pairs.empty())
-        continue;
-      // find the smallest ctx_id this profile has and I am responsible for
-      size_t cursor =
-          lower_bound(
-              ctx_id_idx_pairs.begin(), ctx_id_idx_pairs.end(),
-              std::make_pair(ctx_id, std::numeric_limits<uint64_t>::min()),  // Value to compare
-              [](const std::pair<uint32_t, uint64_t>& lhs,
-                 const std::pair<uint32_t, uint64_t>& rhs) { return lhs.first < rhs.first; })
-          - ctx_id_idx_pairs.begin();
-      heap.push_back({ctx_id_idx_pairs[cursor].first, i, cursor});
+    auto start = std::lower_bound(
+        ctx_id_idx_pairs.begin(), ctx_id_idx_pairs.end(), std::make_pair(cr.first_ctx, 0),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (start->first >= cr.last_ctx)
+      continue;  // Profile has no data for us, skip
+
+    heap.push_back({start, {cr.pis.get()[i].prof_info_idx, ctx_id_idx_pairs[0].second, vmblob}});
+  }
+  heap.shrink_to_fit();
+  std::make_heap(heap.begin(), heap.end(), heap_comp);
+  if (heap.empty())
+    return;  // No data for us!
+
+  // Start pulling data out, one context at a time. The heap efficiently sorts
+  // our search so we can jump straight to the next context we want.
+  const auto first_ctx_id = heap.front().first->first;
+  std::vector<char> buf;
+  while (!heap.empty() && heap.front().first->first < cr.last_ctx) {
+    const uint32_t ctx_id = heap.front().first->first;
+    CtxMetricBlock cmb = {
+        .ctx_id = ctx_id,
+    };
+
+    while (heap.front().first->first == ctx_id) {
+      // Pop the top entry from the heap, and increment it
+      std::pop_heap(heap.begin(), heap.end(), heap_comp);
+      const auto& cur_pair = *(heap.back().first++);
+
+      // Fill cmb with metric/value pairs for this context, from the top profile
+      const auto& [prof_info_idx, first_idx, vmblob] = heap.back().second;
+      interpretValMidsBytes(
+          vmblob.get().data(), prof_info_idx, cur_pair, heap.back().first->second, first_idx, cmb);
+
+      // If the updated entry is still in range, push it back into the heap.
+      // Otherwise pop the entry from the vector completely.
+      if (heap.back().first->first < cr.last_ctx)
+        std::push_heap(heap.begin(), heap.end(), heap_comp);
+      else
+        heap.pop_back();
     }
-    heap.shrink_to_fit();
-    std::make_heap(heap.begin(), heap.end());
-    uint32_t first_ctx_id = heap.front().ctx_id;
 
-    while (1) {
-      // get the min ctx_id in the heap
-      uint32_t ctx_id = heap.front().ctx_id;
-      if (ctx_id > ctx_ids[my_end - 1])
-        break;
+    // Translate the values back into a context block, and write it out
+    auto cmbbuf = cmbBytes(cmb, ctx_id);
+    buf.insert(buf.end(), cmbbuf.begin(), cmbbuf.end());
+  }
 
-      // a new CtxMetricBlock
-      CtxMetricBlock cmb;
-      cmb.ctx_id = ctx_id;
-
-      while (heap.front().ctx_id == ctx_id) {
-        uint32_t prof_idx = heap.front().prof_idx;
-
-        // find data corresponding to this profile
-        auto& vmbytes = profiles_data[prof_idx].second;
-        auto& ctx_id_idx_pairs = profiles_data[prof_idx].first;
-
-        // interpret the bytes of this profile related to ctx_id
-        uint64_t next_ctx_idx = ctx_id_idx_pairs[heap.front().cursor + 1].second;
-        uint64_t first_ctx_idx = ctx_id_idx_pairs[0].second;
-        interpretValMidsBytes(
-            vmbytes.data(), prof_info[prof_idx].prof_info_idx,
-            ctx_id_idx_pairs[heap.front().cursor], next_ctx_idx, first_ctx_idx, cmb);
-
-        // update the heap
-        std::pop_heap(heap.begin(), heap.end());  // the front one will be at the back()
-        heap.back().cursor++;
-        heap.back().ctx_id = ctx_id_idx_pairs[heap.back().cursor].first;
-        std::push_heap(heap.begin(), heap.end());  // the back() will go to the right place
-      }
-
-      auto b = std::move(cmbBytes(cmb, ctx_id));
-      ctxRangeBytes.insert(ctxRangeBytes.end(), b.begin(), b.end());
-    }  // END of while
-    if ((first_ctx_id != LastNodeEnd) && ctxRangeBytes.size() > 0) {
-      uint64_t ctxRangeBytes_off = ctx_off[first_ctx_id];
-      ofhi.writeat(ctxRangeBytes_off, ctxRangeBytes.size(), ctxRangeBytes.data());
-    }
-  }  // END of if my_start < my_end
+  // Write out the whole blob of data where it belongs in the file
+  if (buf.empty())
+    return;
+  assert(first_ctx_id != LastNodeEnd);
+  auto cmfi = cmf->open(true, true);
+  cmfi.writeat(ctx_off[first_ctx_id], buf.size(), buf.data());
 }
 
 void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
@@ -1289,23 +1292,23 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
       cursize += ctx_off[id + 1] - ctx_off[id];
       if (cursize > target) {
         crs.push_back({
-            .start = !crs.empty() ? crs.back().end : 0,
-            .end = id + 1,
+            .first_ctx = !crs.empty() ? crs.back().last_ctx : ctx_ids.front(),
+            .last_ctx = id + 1,
             .pd = profiles_data,
-            .ctx_ids = ctx_ids,
             .pis = prof_info_list,
         });
         cursize = 0;
       }
     }
-    // Last range takes whatever remains
-    crs.push_back({
-        .start = !crs.empty() ? crs.back().end : 0,
-        .end = ctx_ids.size(),
-        .pd = profiles_data,
-        .ctx_ids = ctx_ids,
-        .pis = prof_info_list,
-    });
+    if (crs.empty() || crs.back().last_ctx <= ctx_ids.back()) {
+      // Last range takes whatever remains
+      crs.push_back({
+          .first_ctx = !crs.empty() ? crs.back().last_ctx : ctx_ids.front(),
+          .last_ctx = ctx_ids.back() + 1,
+          .pd = profiles_data,
+          .pis = prof_info_list,
+      });
+    }
   }
 
   // Handle the individual ctx copies
