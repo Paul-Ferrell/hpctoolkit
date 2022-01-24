@@ -977,46 +977,24 @@ std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
   if (profile_ctx_pairs.size() <= 1 || ctx_range.first >= ctx_range.second)
     return {};
 
-  // Wrapper iterator to view the first element of a pair
+  // Compare a range of ctx_ids [first, second) to a ctx_id/idx pair.
+  // ctx_ids within [first, second) compare "equal".
   using ci_pair = std::pair<uint32_t, uint64_t>;
-  struct ctx_id_it : std::vector<ci_pair>::const_iterator {
-    ctx_id_it(std::vector<ci_pair>::const_iterator v)
-        : std::vector<ci_pair>::const_iterator(std::move(v)) {}
-    const auto& operator*() const noexcept {
-      return std::vector<ci_pair>::const_iterator::operator->()->first;
-    }
-    const auto* operator->() const noexcept {
-      return &std::vector<ci_pair>::const_iterator::operator->()->first;
-    }
+  using range = std::pair<uint32_t, uint32_t>;
+  static_assert(!std::is_same_v<ci_pair, range>, "ADL will fail here!");
+  struct compare {
+    bool operator()(const ci_pair& a, const range& b) { return a.first < b.first; }
+    bool operator()(const range& a, const ci_pair& b) { return a.second <= b.first; }
   };
 
-  // Iterator storage for the two inputs. Last element of profile_ctx_pairs is
-  // LastNodeEnd, so we skip it here.
-  std::vector<ci_pair>::const_iterator curIn;
-  const auto lastIn = --profile_ctx_pairs.end();
-  auto curTarget = ctx_range.first;
-  const auto lastTarget = ctx_range.second;
-
-  // Binary search down to the first ctx_id we want to extract...
-  curIn =
-      std::lower_bound(ctx_id_it(profile_ctx_pairs.begin()), ctx_id_it(lastIn), ctx_range.first);
-
-  // ...And then use normal iteration to find the others, until we run out.
-  std::vector<ci_pair> out;
-  while (curIn != lastIn && curTarget != lastTarget) {
-    if (curIn->first < curTarget)
-      ++curIn;
-    else if (curIn->first > curTarget)
-      ++curTarget;
-    else {  // curIn->first == curTarget
-      out.emplace_back(*curIn);
-      ++curIn;
-      ++curTarget;
-    }
-  }
+  // Binary search for the [first, last) range among this profile's pairs.
+  // Skip the last pair, which is always LastNodeEnd.
+  auto [first, last] =
+      std::equal_range(profile_ctx_pairs.begin(), --profile_ctx_pairs.end(), ctx_range, compare{});
+  std::vector<ci_pair> out(first, last);
 
   // Last pair is always LastNodeEnd
-  out.emplace_back(LastNodeEnd, curIn->second);
+  out.emplace_back(LastNodeEnd, last->second);
   return out;
 }
 
