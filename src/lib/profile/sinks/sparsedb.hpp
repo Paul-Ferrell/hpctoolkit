@@ -173,12 +173,9 @@ private:
   void flushOutBuffer(uint64_t wrt_off, OutBuffer& ob);
   uint64_t writeProf(const std::vector<char>& prof_bytes, uint32_t prof_info_idx);
 
-//***************************************************************************
-// cct.db
-//***************************************************************************
-#define SPARSE_NOT_FOUND -1
-#define SPARSE_END       -2
-
+  //***************************************************************************
+  // cct.db
+  //***************************************************************************
   std::optional<hpctoolkit::util::File> cmf;
 
   // ctx offsets
@@ -195,18 +192,13 @@ private:
   std::vector<pms_profile_info_t> prof_info_list;
 
   // helper - gather ctx id idx pairs
-  struct PMS_CtxIdIdxPair {
-    uint32_t ctx_id;   // = cct node id
-    uint64_t ctx_idx;  // starting location of the context's values in value array
-  };
   struct profCtxIdIdxPairs {
-    std::vector<PMS_CtxIdIdxPair>* prof_ctx_pairs;
+    std::vector<std::pair<uint32_t, uint64_t>>* prof_ctx_pairs;
     pms_profile_info_t* pi;
   };
   hpctoolkit::util::ParallelForEach<profCtxIdIdxPairs> parForCiip;
-  std::vector<std::vector<PMS_CtxIdIdxPair>> all_prof_ctx_pairs;
+  std::vector<std::vector<std::pair<uint32_t, uint64_t>>> all_prof_ctx_pairs;
 
-  PMS_CtxIdIdxPair ctxIdIdxPair(const char* input);
   void handleItemCiip(profCtxIdIdxPairs& ciip);
 
   // helper - extract one profile data
@@ -214,14 +206,15 @@ private:
     std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>*
         profiles_data;  // ptr to the destination
     std::vector<pms_profile_info_t>* pi_list;
-    std::vector<std::vector<PMS_CtxIdIdxPair>>* all_prof_ctx_pairs;
+    std::vector<std::vector<std::pair<uint32_t, uint64_t>>>* all_prof_ctx_pairs;
     std::vector<uint32_t>* ctx_ids;
     uint i;
   };
   hpctoolkit::util::ResettableParallelForEach<profData> parForPd;
 
   std::vector<std::pair<uint32_t, uint64_t>> filterCtxPairs(
-      const std::vector<uint32_t>& ctx_ids, const std::vector<PMS_CtxIdIdxPair>& profile_ctx_pairs);
+      const std::vector<uint32_t>& ctx_ids,
+      const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs);
 
   void handleItemPd(profData& pd);
 

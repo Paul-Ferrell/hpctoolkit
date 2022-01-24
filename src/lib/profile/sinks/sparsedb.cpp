@@ -863,7 +863,8 @@ void SparseDB::cctdbSetUp() {
 
   // Read and parse the ctx_id/idx pairs for each of the profiles, in parallel
   {
-    all_prof_ctx_pairs = std::vector<std::vector<PMS_CtxIdIdxPair>>(prof_info_list.size());
+    all_prof_ctx_pairs.clear();
+    all_prof_ctx_pairs.resize(prof_info_list.size());
     std::vector<profCtxIdIdxPairs> ciips;
     ciips.reserve(prof_info_list.size());
     for (size_t i = 0; i < prof_info_list.size(); i++)
@@ -959,60 +960,49 @@ void SparseDB::writeCtxInfoSec() {
   cct_major_fi.writeat(CMS_hdr_SIZE, info_bytes.size(), info_bytes.data());
 }
 
-//
-// helper - gather ctx id idx pairs
-//
-SparseDB::PMS_CtxIdIdxPair SparseDB::ctxIdIdxPair(const char* input) {
-  PMS_CtxIdIdxPair ctx_pair;
-  ctx_pair.ctx_id = interpretByte4(input);
-  ctx_pair.ctx_idx = interpretByte8(input + PMS_ctx_id_SIZE);
-  return ctx_pair;
-}
-
 void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
-  auto pmfi = pmf->open(false, false);
-  auto pi = *(ciip.pi);
-  std::vector<PMS_CtxIdIdxPair> ctx_id_idx_pairs(pi.num_nzctxs + 1);
+  const auto& pi = *ciip.pi;
   if (pi.num_nzctxs == 0) {
-    *(ciip.prof_ctx_pairs) = std::move(ctx_id_idx_pairs);
+    // No data in this profile, skip
     return;
   }
 
-  // read the whole ctx_id_idx_pairs chunk
-  int count = (pi.num_nzctxs + 1) * PMS_ctx_pair_SIZE;
-  char* input = new char[count];
-  uint64_t ctx_pairs_offset = pi.offset + pi.num_vals * (PMS_val_SIZE + PMS_mid_SIZE);
-  pmfi.readat(ctx_pairs_offset, count, input);
+  // Read the whole chunk of ctx_id/idx pairs
+  auto pmfi = pmf->open(false, false);
+  std::vector<char> buf((pi.num_nzctxs + 1) * PMS_ctx_pair_SIZE);
+  pmfi.readat(pi.offset + pi.num_vals * PMS_vm_pair_SIZE, buf.size(), buf.data());
 
-  // interpret the chunk and store accordingly
-  for (int i = 0; i < count; i += PMS_ctx_pair_SIZE)
-    ctx_id_idx_pairs[i / PMS_ctx_pair_SIZE] = std::move(ctxIdIdxPair(input + i));
-
-  delete[] input;
-  *(ciip.prof_ctx_pairs) = std::move(ctx_id_idx_pairs);
+  // Parse and save in the output
+  ciip.prof_ctx_pairs->reserve(pi.num_nzctxs + 1);
+  for (uint32_t i = 0; i < pi.num_nzctxs + 1; i++) {
+    const char* cur = &buf[i * PMS_ctx_pair_SIZE];
+    ciip.prof_ctx_pairs->emplace_back(interpretByte4(cur), interpretByte8(cur + PMS_ctx_id_SIZE));
+  }
 }
 
 std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
-    const std::vector<uint32_t>& ctx_ids, const std::vector<PMS_CtxIdIdxPair>& profile_ctx_pairs) {
+    const std::vector<uint32_t>& ctx_ids,
+    const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs) {
   if (profile_ctx_pairs.size() <= 1 || ctx_ids.empty())
     return {};
   assert(std::is_sorted(ctx_ids.begin(), ctx_ids.end()));
 
-  // Wrapper iterator to view the ctx_id of a PMS_CtxIdIdxPair
-  struct ctx_id_it : std::vector<PMS_CtxIdIdxPair>::const_iterator {
-    ctx_id_it(std::vector<PMS_CtxIdIdxPair>::const_iterator v)
-        : std::vector<PMS_CtxIdIdxPair>::const_iterator(std::move(v)) {}
+  // Wrapper iterator to view the first element of a pair
+  using ci_pair = std::pair<uint32_t, uint64_t>;
+  struct ctx_id_it : std::vector<ci_pair>::const_iterator {
+    ctx_id_it(std::vector<ci_pair>::const_iterator v)
+        : std::vector<ci_pair>::const_iterator(std::move(v)) {}
     const auto& operator*() const noexcept {
-      return std::vector<PMS_CtxIdIdxPair>::const_iterator::operator->()->ctx_id;
+      return std::vector<ci_pair>::const_iterator::operator->()->first;
     }
     const auto* operator->() const noexcept {
-      return &std::vector<PMS_CtxIdIdxPair>::const_iterator::operator->()->ctx_id;
+      return &std::vector<ci_pair>::const_iterator::operator->()->first;
     }
   };
 
   // Iterator storage for the two inputs. Last element of profile_ctx_pairs is
   // LastNodeEnd, so we skip it here.
-  std::vector<PMS_CtxIdIdxPair>::const_iterator curIn;
+  std::vector<ci_pair>::const_iterator curIn;
   const auto lastIn = --profile_ctx_pairs.end();
   auto curTarget = ctx_ids.begin();
   const auto lastTarget = ctx_ids.end();
@@ -1022,21 +1012,21 @@ std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
       std::lower_bound(ctx_id_it(profile_ctx_pairs.begin()), ctx_id_it(lastIn), ctx_ids.front());
 
   // ...And then use normal iteration to find the others, until we run out.
-  std::vector<std::pair<uint32_t, uint64_t>> out;
+  std::vector<ci_pair> out;
   while (curIn != lastIn && curTarget != lastTarget) {
-    if (curIn->ctx_id < *curTarget)
+    if (curIn->first < *curTarget)
       ++curIn;
-    else if (curIn->ctx_id > *curTarget)
+    else if (curIn->first > *curTarget)
       ++curTarget;
-    else {  // curIn->ctxId == *curTarget
-      out.emplace_back(curIn->ctx_id, curIn->ctx_idx);
+    else {  // curIn->first == *curTarget
+      out.emplace_back(*curIn);
       ++curIn;
       ++curTarget;
     }
   }
 
   // Last pair is always LastNodeEnd
-  out.emplace_back(LastNodeEnd, curIn->ctx_idx);
+  out.emplace_back(LastNodeEnd, curIn->second);
 
   assert(out.size() <= ctx_ids.size() + 1);
   return out;
