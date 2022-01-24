@@ -1019,91 +1019,6 @@ void SparseDB::handleItemPd(profData& pd) {
 }
 
 //
-// helper - convert CtxMetricBlocks to correct bytes for writing
-//
-std::vector<char> SparseDB::mvbBytes(const MetricValBlock& mvb) {
-  uint64_t num_vals = mvb.values_prof_idxs.size();
-  std::vector<char> bytes;
-  std::vector<char> b;
-
-  for (uint i = 0; i < num_vals; i++) {
-    auto& pair = mvb.values_prof_idxs[i];
-    b = convertToByte8(pair.first.bits);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-    b = convertToByte4(pair.second);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-  }
-
-  assert(bytes.size() == num_vals * CMS_val_prof_idx_pair_SIZE);
-  return bytes;
-}
-
-std::vector<char> SparseDB::mvbsBytes(std::map<uint16_t, MetricValBlock>& metrics) {
-  uint64_t num_vals = 0;
-  std::vector<char> bytes;
-
-  for (auto i = metrics.begin(); i != metrics.end(); i++) {
-    MetricValBlock mvb = i->second;
-    i->second.num_values = mvb.values_prof_idxs.size();
-    num_vals += mvb.values_prof_idxs.size();
-
-    auto mvb_bytes = mvbBytes(mvb);
-    bytes.insert(bytes.end(), mvb_bytes.begin(), mvb_bytes.end());
-  }
-
-  assert(num_vals == (uint)bytes.size() / CMS_val_prof_idx_pair_SIZE);
-
-  return bytes;
-}
-
-std::vector<char> SparseDB::metIdIdxPairsBytes(const std::map<uint16_t, MetricValBlock>& metrics) {
-  std::vector<char> bytes;
-  std::vector<char> b;
-
-  uint64_t m_idx = 0;
-  for (auto i = metrics.begin(); i != metrics.end(); i++) {
-    uint16_t mid = i->first;
-    b = convertToByte2(mid);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-    b = convertToByte8(m_idx);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-    m_idx += i->second.num_values;
-  }
-
-  uint16_t mid = LastMidEnd;
-  b = convertToByte2(mid);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-  b = convertToByte8(m_idx);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-
-  assert(bytes.size() == ((metrics.size() + 1) * CMS_m_pair_SIZE));
-  return bytes;
-}
-
-std::vector<char> SparseDB::cmbBytes(const CtxMetricBlock& cmb, const uint32_t& ctx_id) {
-  assert(cmb.metrics.size() > 0);
-  assert(ctx_off.size() > 0);
-
-  // convert MetricValBlocks to val & prof pairs bytes
-  std::map<uint16_t, MetricValBlock> metrics = cmb.metrics;
-  auto bytes = std::move(mvbsBytes(metrics));
-
-  // convert MetricValBlocks to metric Id & Idx pairs bytes
-  auto miip_bytes = std::move(metIdIdxPairsBytes(metrics));
-  bytes.insert(bytes.end(), miip_bytes.begin(), miip_bytes.end());
-
-  // check if the previous calculations for offsets and newly collected data match
-  if (ctx_off[ctx_id] + bytes.size() != ctx_off[ctx_id + 1]) {
-    util::log::fatal() << __FUNCTION__ << ": (ctx id: " << ctx_id
-                       << ") (num_vals: " << bytes.size() / CMS_val_prof_idx_pair_SIZE
-                       << ") (num_nzmids: " << metrics.size() << ") (ctx_off: " << ctx_off[ctx_id]
-                       << ") (next_ctx_off: " << ctx_off[ctx_id + 1] << ")";
-  }
-
-  return bytes;
-}
-
-//
 // write contexts
 //
 void SparseDB::handleItemCtxs(ctxRange& cr) {
@@ -1142,16 +1057,15 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
   if (heap.empty())
     return;  // No data for us!
 
-  // Start pulling data out, one context at a time. The heap efficiently sorts
+  // Start copying data over, one context at a time. The heap efficiently sorts
   // our search so we can jump straight to the next context we want.
   const auto first_ctx_id = heap.front().first->first;
   std::vector<char> buf;
   while (!heap.empty() && heap.front().first->first < cr.last_ctx) {
     const uint32_t ctx_id = heap.front().first->first;
-    CtxMetricBlock cmb = {
-        .ctx_id = ctx_id,
-    };
+    std::map<uint16_t, std::vector<std::pair<hpcrun_metricVal_t, uint32_t>>> values;
 
+    // Pull the data out for one context and save it to cmb
     while (heap.front().first->first == ctx_id) {
       // Pop the top entry from the heap, and increment it
       std::pop_heap(heap.begin(), heap.end(), heap_comp);
@@ -1166,8 +1080,8 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
         val.bits = interpretByte8(cur);
         uint16_t mid = interpretByte2(cur + PMS_val_SIZE);
 
-        auto [it, first] = cmb.metrics.try_emplace(mid, MetricValBlock{.mid = mid});
-        it->second.values_prof_idxs.emplace_back(val, prof_info_idx);
+        auto [it, first] = values.try_emplace(mid);
+        it->second.emplace_back(val, prof_info_idx);
       }
 
       // If the updated entry is still in range, push it back into the heap.
@@ -1178,9 +1092,41 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
         heap.pop_back();
     }
 
-    // Translate the values back into a context block, and write it out
-    auto cmbbuf = cmbBytes(cmb, ctx_id);
-    buf.insert(buf.end(), cmbbuf.begin(), cmbbuf.end());
+#ifndef NDEBUG
+    const auto oldsz = buf.size();
+#endif
+
+    // Construct the prof_idx/value pairs for this context, in bytes
+    for (const auto& [mid, pvs] : values) {
+      for (const auto& [val, prof_idx] : pvs) {
+        auto b = convertToByte8(val.bits);
+        buf.insert(buf.end(), b.begin(), b.end());
+        b = convertToByte4(prof_idx);
+        buf.insert(buf.end(), b.begin(), b.end());
+      }
+    }
+
+    // Construct the metric_id/idx pairs for this context, in bytes
+    {
+      uint64_t idx = 0;
+      for (const auto& [mid, pvs] : values) {
+        auto b = convertToByte2(mid);
+        buf.insert(buf.end(), b.begin(), b.end());
+        b = convertToByte8(idx);
+        buf.insert(buf.end(), b.begin(), b.end());
+        idx += pvs.size();
+      }
+
+      // Last entry is always LastMidEnd
+      auto b = convertToByte2(LastMidEnd);
+      buf.insert(buf.end(), b.begin(), b.end());
+      b = convertToByte8(idx);
+      buf.insert(buf.end(), b.begin(), b.end());
+    }
+
+    assert(
+        buf.size() - oldsz + ctx_off[ctx_id] == ctx_off[ctx_id + 1]
+        && "Final layout doesn't match ctx_off!");
   }
 
   // Write out the whole blob of data where it belongs in the file

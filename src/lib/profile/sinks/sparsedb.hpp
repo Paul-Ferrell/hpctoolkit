@@ -210,23 +210,6 @@ private:
 
   void handleItemPd(profData& pd);
 
-  // helper - convert one profile data to a CtxMetricBlock
-  struct MetricValBlock {
-    uint16_t mid;
-    uint32_t num_values;  // can be set at the end, used as idx for mid
-    std::vector<std::pair<hpcrun_metricVal_t, uint32_t>> values_prof_idxs;
-  };
-  struct CtxMetricBlock {
-    uint32_t ctx_id;
-    std::map<uint16_t, MetricValBlock> metrics;
-  };
-
-  // helper - convert CtxMetricBlocks to correct bytes for writing
-  std::vector<char> mvbBytes(const MetricValBlock& mvb);
-  std::vector<char> mvbsBytes(std::map<uint16_t, MetricValBlock>& metrics);
-  std::vector<char> metIdIdxPairsBytes(const std::map<uint16_t, MetricValBlock>& metrics);
-  std::vector<char> cmbBytes(const CtxMetricBlock& cmb, const uint32_t& ctx_id);
-
   struct ctxRange {
     uint32_t first_ctx;
     uint32_t last_ctx;
