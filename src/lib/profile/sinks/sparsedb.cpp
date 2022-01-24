@@ -1025,7 +1025,7 @@ std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
 
 void SparseDB::handleItemPd(profData& pd) {
   // Extract the ctx_id/idx pairs that we need for this blob
-  auto pairs = filterCtxPairs(*(pd.ctx_ids), pd.all_prof_ctx_pairs->at(pd.i));
+  auto pairs = filterCtxPairs(pd.ctx_ids, pd.prof_ctx_pairs);
 
   // Read the blob of data containing all our pairs
   std::vector<char> blob;
@@ -1035,37 +1035,12 @@ void SparseDB::handleItemPd(profData& pd) {
 
     auto pmfi = pmf->open(false, false);
     pmfi.readat(
-        pd.pi_list->at(pd.i).offset + pairs.front().second * PMS_vm_pair_SIZE, blob.size(),
-        blob.data());
+        pd.pi.get().offset + pairs.front().second * PMS_vm_pair_SIZE, blob.size(), blob.data());
   }
 
   // Update the profData with the data we gathered
-  pd.profiles_data->at(pd.i) = {std::move(pairs), std::move(blob)};
-}
-
-std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>
-SparseDB::profilesData(std::vector<uint32_t>& ctx_ids) {
-  auto pilist_size = prof_info_list.size();
-
-  std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>
-      profiles_data(pilist_size);
-  std::vector<profData> pds(pilist_size);
-
-  // read all profiles for this ctx_ids group
-  for (uint i = 0; i < pilist_size; i++) {
-    profData pd;
-    pd.i = i;
-    pd.pi_list = &prof_info_list;
-    pd.all_prof_ctx_pairs = &all_prof_ctx_pairs;
-    pd.ctx_ids = &ctx_ids;
-    pd.profiles_data = &profiles_data;
-    pds[i] = std::move(pd);
-  }
-
-  parForPd.fill(std::move(pds));
-  parForPd.reset();  // Also waits for work to complete
-
-  return profiles_data;
+  pd.profile_data.get().first = std::move(pairs);
+  pd.profile_data.get().second = std::move(blob);
 }
 
 //
@@ -1276,11 +1251,29 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
 }
 
 void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
-  if (ctx_ids.size() == 0)
+  if (ctx_ids.empty())
     return;
 
-  // read corresponding ctx_id_idx pairs and relevant val&mids bytes
-  auto profiles_data = std::move(profilesData(ctx_ids));
+  // Read the blob of data we need from each profile
+  std::vector<std::pair<
+      std::vector<std::pair<uint32_t, uint64_t>>,  // filtered ctx_id/idx pairs
+      std::vector<char>                            // metric value blob
+      >>
+      profiles_data(prof_info_list.size());
+  {
+    std::vector<profData> pds;
+    pds.reserve(profiles_data.size());
+    for (size_t i = 0; i < profiles_data.size(); i++) {
+      pds.push_back({
+          .profile_data = profiles_data[i],
+          .pi = prof_info_list[i],
+          .prof_ctx_pairs = all_prof_ctx_pairs[i],
+          .ctx_ids = ctx_ids,
+      });
+    }
+    parForPd.fill(std::move(pds));
+    parForPd.reset();  // Also waits for work to complete
+  }
 
   // assign ctx_ids to diffrent threads based on size
   uint first_ctx_off = ctx_off[ctx_ids.front()];

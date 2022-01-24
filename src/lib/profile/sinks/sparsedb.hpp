@@ -196,12 +196,11 @@ private:
 
   // helper - extract one profile data
   struct profData {
-    std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>*
-        profiles_data;  // ptr to the destination
-    std::vector<pms_profile_info_t>* pi_list;
-    std::vector<std::vector<std::pair<uint32_t, uint64_t>>>* all_prof_ctx_pairs;
-    std::vector<uint32_t>* ctx_ids;
-    uint i;
+    std::reference_wrapper<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>
+        profile_data;
+    std::reference_wrapper<const pms_profile_info_t> pi;
+    std::reference_wrapper<const std::vector<std::pair<uint32_t, uint64_t>>> prof_ctx_pairs;
+    std::reference_wrapper<const std::vector<uint32_t>> ctx_ids;
   };
   hpctoolkit::util::ResettableParallelForEach<profData> parForPd;
 
@@ -210,9 +209,6 @@ private:
       const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs);
 
   void handleItemPd(profData& pd);
-
-  std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>
-  profilesData(std::vector<uint32_t>& ctx_ids);
 
   // helper - convert one profile data to a CtxMetricBlock
   struct MetricValBlock {
