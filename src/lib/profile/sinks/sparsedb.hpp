@@ -227,7 +227,7 @@ private:
       const hpcrun_metricVal_t val, const uint16_t mid, const uint32_t prof_idx,
       CtxMetricBlock& cmb);
   void interpretValMidsBytes(
-      char* vminput, const uint32_t prof_idx, const std::pair<uint32_t, uint64_t>& ctx_pair,
+      const char* vminput, const uint32_t prof_idx, const std::pair<uint32_t, uint64_t>& ctx_pair,
       const uint64_t next_ctx_idx, const uint64_t first_ctx_idx, CtxMetricBlock& cmb);
 
   // helper - convert CtxMetricBlocks to correct bytes for writing
@@ -254,9 +254,11 @@ private:
     uint64_t start;
     uint64_t end;
 
-    std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>* pd;
-    std::vector<uint32_t>* ctx_ids;
-    std::vector<pms_profile_info_t>* pis;
+    std::reference_wrapper<
+        const std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>>
+        pd;
+    std::reference_wrapper<const std::vector<uint32_t>> ctx_ids;
+    std::reference_wrapper<const std::vector<pms_profile_info_t>> pis;
   };
 
   std::vector<uint32_t> ctx_group_list;  // each number represents the starting ctx id for this

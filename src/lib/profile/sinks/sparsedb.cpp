@@ -1070,14 +1070,14 @@ void SparseDB::updateCtxMetBloc(
 }
 
 void SparseDB::interpretValMidsBytes(
-    char* vminput, const uint32_t prof_idx, const std::pair<uint32_t, uint64_t>& ctx_pair,
+    const char* vminput, const uint32_t prof_idx, const std::pair<uint32_t, uint64_t>& ctx_pair,
     const uint64_t next_ctx_idx, const uint64_t first_ctx_idx, CtxMetricBlock& cmb) {
   uint32_t ctx_id = ctx_pair.first;
   uint64_t ctx_idx = ctx_pair.second;
   uint64_t num_val_this_ctx = next_ctx_idx - ctx_idx;
   assert(cmb.ctx_id == ctx_id);
 
-  char* ctx_met_input = vminput + (PMS_val_SIZE + PMS_mid_SIZE) * (ctx_idx - first_ctx_idx);
+  const char* ctx_met_input = vminput + (PMS_val_SIZE + PMS_mid_SIZE) * (ctx_idx - first_ctx_idx);
   for (uint i = 0; i < num_val_this_ctx; i++) {
     hpcrun_metricVal_t val;
     val.bits = interpretByte8(ctx_met_input);
@@ -1182,9 +1182,9 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
 
   uint my_start = cr.start;
   uint my_end = cr.end;
-  auto& profiles_data = *cr.pd;
-  auto& ctx_ids = *cr.ctx_ids;
-  auto& prof_info = *cr.pis;
+  const auto& profiles_data = cr.pd.get();
+  const auto& ctx_ids = cr.ctx_ids.get();
+  const auto& prof_info = cr.pis.get();
 
   if (my_start < my_end) {
     // each thread sets up a heap to store <ctx_id, profile_idx, profile_cursor> for each profile
@@ -1275,52 +1275,40 @@ void SparseDB::rwOneCtxGroup(std::vector<uint32_t>& ctx_ids) {
     parForPd.reset();  // Also waits for work to complete
   }
 
-  // assign ctx_ids to diffrent threads based on size
-  uint first_ctx_off = ctx_off[ctx_ids.front()];
-  uint total_ctx_ids_size = ctx_off[ctx_ids.back() + 1] - first_ctx_off;
-  uint thread_ctx_ids_size = round(total_ctx_ids_size / src.teamSize());
-
-  // record the start and end position of each thread's ctxs
-  std::vector<uint64_t> t_starts(src.teamSize(), 0);
-  std::vector<uint64_t> t_ends(src.teamSize(), 0);
-  std::size_t cur_thread = 0;
-
-  // make sure first thread at least gets one ctx
-  size_t cur_size = ctx_off[ctx_ids.front() + 1] - first_ctx_off;  // size of first ctx
-  t_starts[cur_thread] = 0;  // the first ctx goes to t_starts[0]
-  if (src.teamSize() > 1) {
-    for (uint i = 2; i <= ctx_ids.size(); i++) {
-      auto cid = (i == ctx_ids.size()) ? ctx_ids[i - 1] + 1 : ctx_ids[i];
-      auto cid_size = ctx_off[cid] - ctx_off[ctx_ids[i - 1]];
-
-      if (cur_size > thread_ctx_ids_size) {
-        t_ends[cur_thread] = i - 1;
-        cur_thread++;
-        t_starts[cur_thread] = i - 1;
-        cur_size = cid_size;
-      } else {
-        cur_size += cid_size;
-      }
-      if (cur_thread == src.teamSize() - 1)
+  // Divide up this ctx group into ranges suitable for distributing to threads.
+  std::vector<ctxRange> crs;
+  {
+    crs.reserve(src.teamSize());
+    const size_t target = (ctx_off[ctx_ids.back() + 1] - ctx_off[ctx_ids.front()]) / src.teamSize();
+    size_t cursize = 0;
+    for (const uint32_t id : ctx_ids) {
+      // Stop allocating once we have nearly enough ranges
+      if (crs.size() + 1 == src.teamSize())
         break;
-    }
-  }
-  t_ends[cur_thread] = ctx_ids.size();
 
-  // prepare for the real work
-  std::vector<ctxRange> crs(src.teamSize());
-  auto pdptr = &profiles_data;
-  auto cidsptr = &ctx_ids;
-  auto pisptr = &prof_info_list;
-  for (std::size_t i = 0; i < src.teamSize(); i++) {
-    ctxRange cr;
-    cr.start = t_starts[i];
-    cr.end = t_ends[i];
-    cr.pd = pdptr;
-    cr.ctx_ids = cidsptr;
-    cr.pis = pisptr;
-    crs[i] = std::move(cr);
+      cursize += ctx_off[id + 1] - ctx_off[id];
+      if (cursize > target) {
+        crs.push_back({
+            .start = !crs.empty() ? crs.back().end : 0,
+            .end = id + 1,
+            .pd = profiles_data,
+            .ctx_ids = ctx_ids,
+            .pis = prof_info_list,
+        });
+        cursize = 0;
+      }
+    }
+    // Last range takes whatever remains
+    crs.push_back({
+        .start = !crs.empty() ? crs.back().end : 0,
+        .end = ctx_ids.size(),
+        .pd = profiles_data,
+        .ctx_ids = ctx_ids,
+        .pis = prof_info_list,
+    });
   }
+
+  // Handle the individual ctx copies
   parForCtxs.fill(std::move(crs));
   parForCtxs.reset();
 }
