@@ -940,15 +940,14 @@ void SparseDB::writeCCTDB() {
   // read and write all the context groups I(rank) am responsible for
   rwAllCtxGroup();
 
-  // footer
+  // The last rank is in charge of writing the final footer, AFTER all other
+  // writes have completed. If the footer isn't there, the file isn't complete.
   mpi::barrier();
-  if (mpi::World::rank() != mpi::World::size() - 1)
-    return;
-
-  auto cmfi = cmf->open(true, false);
-  auto footer_off = ctx_off.back();
-  uint64_t footer_val = CCTDBftr;
-  cmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
+  if (mpi::World::rank() + 1 == mpi::World::size()) {
+    const uint64_t footer = CCTDBftr;
+    auto cmfi = cmf->open(true, false);
+    cmfi.writeat(ctx_off.back(), sizeof footer, &footer);
+  }
 }
 
 void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
