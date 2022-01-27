@@ -185,50 +185,16 @@ private:
   std::vector<pms_profile_info_t> prof_info_list;
 
   // helper - gather ctx id idx pairs
-  struct profCtxIdIdxPairs {
-    std::reference_wrapper<std::vector<std::pair<uint32_t, uint64_t>>> prof_ctx_pairs;
-    std::reference_wrapper<const pms_profile_info_t> pi;
-  };
-  hpctoolkit::util::ParallelForEach<profCtxIdIdxPairs> parForCiip;
+  hpctoolkit::util::ParallelFor parForCiip;
   std::vector<std::vector<std::pair<uint32_t, uint64_t>>> all_prof_ctx_pairs;
 
-  void handleItemCiip(profCtxIdIdxPairs& ciip);
-
-  // helper - extract one profile data
-  struct profData {
-    std::reference_wrapper<std::pair<
-        std::pair<
-            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
-            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,
-        std::vector<char>>>
-        profile_data;
-    std::reference_wrapper<const pms_profile_info_t> pi;
-    std::reference_wrapper<const std::vector<std::pair<uint32_t, uint64_t>>> prof_ctx_pairs;
-    std::pair<uint32_t, uint32_t> ctx_range;
-  };
-  hpctoolkit::util::ResettableParallelForEach<profData> parForPd;
-
-  void handleItemPd(profData& pd);
-
-  struct ctxRange {
-    uint32_t first_ctx;
-    uint32_t last_ctx;
-
-    std::reference_wrapper<const std::vector<std::pair<
-        std::pair<
-            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
-            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,
-        std::vector<char>>>>
-        pd;
-    std::reference_wrapper<const std::vector<pms_profile_info_t>> pis;
-  };
+  hpctoolkit::util::ResettableParallelFor parForPd;
 
   std::vector<uint32_t> ctx_group_list;  // each number represents the starting ctx id for this
                                          // group
   hpctoolkit::mpi::SharedAccumulator accCtxGrp;
-  hpctoolkit::util::ResettableParallelForEach<ctxRange> parForCtxs;
+  hpctoolkit::util::ResettableParallelForEach<std::pair<uint32_t, uint32_t>> parForCtxs;
 
-  void handleItemCtxs(ctxRange& cr);
   void rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx);
   void rwAllCtxGroup();
 };

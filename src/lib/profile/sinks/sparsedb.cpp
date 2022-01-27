@@ -833,6 +833,28 @@ uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, uint32_t prof_
 ///...same [sparse metrics] for all rest ctxs
 /// CCTDB FOOTER CORRECT, FILE COMPLETE
 //***************************************************************************
+static std::vector<std::pair<uint32_t, uint64_t>>
+readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
+  if (pi.num_nzctxs == 0) {
+    // No data in this profile, skip
+    return {};
+  }
+
+  // Read the whole chunk of ctx_id/idx pairs
+  auto pmfi = pmf.open(false, false);
+  std::vector<char> buf((pi.num_nzctxs + 1) * PMS_ctx_pair_SIZE);
+  pmfi.readat(pi.offset + pi.num_vals * PMS_vm_pair_SIZE, buf.size(), buf.data());
+
+  // Parse and save in the output
+  std::vector<std::pair<uint32_t, uint64_t>> prof_ctx_pairs;
+  prof_ctx_pairs.reserve(pi.num_nzctxs + 1);
+  for (uint32_t i = 0; i < pi.num_nzctxs + 1; i++) {
+    const char* cur = &buf[i * PMS_ctx_pair_SIZE];
+    prof_ctx_pairs.emplace_back(interpretByte4(cur), interpretByte8(cur + PMS_ctx_id_SIZE));
+  }
+  return prof_ctx_pairs;
+}
+
 void SparseDB::cctdbSetUp() {
   // Lay out the cct.db metric data section, last is total size.
   ctx_off = std::vector<uint64_t>(ctxcnt + 1, 0);
@@ -896,11 +918,9 @@ void SparseDB::cctdbSetUp() {
   {
     all_prof_ctx_pairs.clear();
     all_prof_ctx_pairs.resize(prof_info_list.size());
-    std::vector<profCtxIdIdxPairs> ciips;
-    ciips.reserve(prof_info_list.size());
-    for (size_t i = 0; i < prof_info_list.size(); i++)
-      ciips.push_back({all_prof_ctx_pairs[i], prof_info_list[i]});
-    parForCiip.fill(std::move(ciips), [&](profCtxIdIdxPairs& item) { handleItemCiip(item); });
+    parForCiip.fill(prof_info_list.size(), [this](size_t i) {
+      all_prof_ctx_pairs[i] = readProfileCtxPairs(*pmf, prof_info_list[i]);
+    });
     parForCiip.contribute(parForCiip.wait());
   }
 }
@@ -946,36 +966,18 @@ void SparseDB::writeCCTDB() {
   }
 }
 
-void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
-  const auto& pi = ciip.pi.get();
-  if (pi.num_nzctxs == 0) {
-    // No data in this profile, skip
-    return;
-  }
-
-  // Read the whole chunk of ctx_id/idx pairs
-  auto pmfi = pmf->open(false, false);
-  std::vector<char> buf((pi.num_nzctxs + 1) * PMS_ctx_pair_SIZE);
-  pmfi.readat(pi.offset + pi.num_vals * PMS_vm_pair_SIZE, buf.size(), buf.data());
-
-  // Parse and save in the output
-  auto& prof_ctx_pairs = ciip.prof_ctx_pairs.get();
-  prof_ctx_pairs.reserve(pi.num_nzctxs + 1);
-  for (uint32_t i = 0; i < pi.num_nzctxs + 1; i++) {
-    const char* cur = &buf[i * PMS_ctx_pair_SIZE];
-    prof_ctx_pairs.emplace_back(interpretByte4(cur), interpretByte8(cur + PMS_ctx_id_SIZE));
-  }
-}
-
-void SparseDB::handleItemPd(profData& pd) {
-  auto& prof_data = pd.profile_data.get();
-  const auto& ctx_pairs = pd.prof_ctx_pairs.get();
-
-  if (ctx_pairs.size() <= 1 || pd.ctx_range.first >= pd.ctx_range.second) {
+static std::pair<
+    std::pair<
+        std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
+        std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,
+    std::vector<char>>
+readPartialProfile(
+    uint32_t first_ctx, uint32_t last_ctx, const util::File& pmf,
+    const pms_profile_info_t& prof_info,
+    const std::vector<std::pair<uint32_t, uint64_t>>& ctx_pairs) {
+  if (ctx_pairs.size() <= 1 || first_ctx >= last_ctx) {
     // Empty range, we don't have any data to add.
-    prof_data.first = {ctx_pairs.begin(), ctx_pairs.begin()};
-    prof_data.second.clear();
-    return;
+    return {{ctx_pairs.begin(), ctx_pairs.begin()}, {}};
   }
 
   // Compare a range of ctx_ids [first, second) to a ctx_id/idx pair.
@@ -990,25 +992,30 @@ void SparseDB::handleItemPd(profData& pd) {
 
   // Binary search for the [first, last) range among this profile's pairs.
   // Skip the last pair, which is always LastNodeEnd.
-  prof_data.first = std::equal_range(ctx_pairs.begin(), --ctx_pairs.end(), pd.ctx_range, compare{});
-  const auto first_idx = prof_data.first.first->second;
-  const auto last_idx = prof_data.first.second->second;
+  auto ctx_range =
+      std::equal_range(ctx_pairs.begin(), --ctx_pairs.end(), range(first_ctx, last_ctx), compare{});
+  const auto first_idx = ctx_range.first->second;
+  const auto last_idx = ctx_range.second->second;
 
   // Read the blob of data containing all our pairs
   std::vector<char> blob;
   blob.resize((last_idx - first_idx) * PMS_vm_pair_SIZE);
   assert(!blob.empty());
 
-  auto pmfi = pmf->open(false, false);
-  pmfi.readat(pd.pi.get().offset + first_idx * PMS_vm_pair_SIZE, blob.size(), blob.data());
-  prof_data.second = std::move(blob);
+  auto pmfi = pmf.open(false, false);
+  pmfi.readat(prof_info.offset + first_idx * PMS_vm_pair_SIZE, blob.size(), blob.data());
+  return {ctx_range, std::move(blob)};
 }
 
-//
-// write contexts
-//
-void SparseDB::handleItemCtxs(ctxRange& cr) {
-  assert(cr.first_ctx < cr.last_ctx && "Empty ctxRange?");
+static void writeContexts(
+    uint32_t first_ctx, uint32_t last_ctx, const util::File& cmf,
+    const std::vector<std::pair<
+        std::pair<
+            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
+            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,
+        std::vector<char>>>& profiles_data,
+    const std::vector<pms_profile_info_t>& profiles_info, const std::vector<uint64_t>& ctx_off) {
+  assert(first_ctx < last_ctx && "Empty ctxRange?");
 
   // Set up a heap with cursors into each profile's data blob
   std::vector<std::pair<
@@ -1024,20 +1031,20 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
     return a.first->first != b.first->first ? a.first->first > b.first->first
                                             : std::get<0>(a.second) > std::get<0>(b.second);
   };
-  heap.reserve(cr.pd.get().size());
-  for (size_t i = 0; i < cr.pd.get().size(); i++) {
-    const auto& [ctx_id_idx_pairs, vmblob] = cr.pd.get()[i];
+  heap.reserve(profiles_data.size());
+  for (size_t i = 0; i < profiles_data.size(); i++) {
+    const auto& [ctx_id_idx_pairs, vmblob] = profiles_data[i];
     if (ctx_id_idx_pairs.first == ctx_id_idx_pairs.second)
       continue;  // Profile is empty, skip
 
     auto start = std::lower_bound(
-        ctx_id_idx_pairs.first, ctx_id_idx_pairs.second, std::make_pair(cr.first_ctx, 0),
+        ctx_id_idx_pairs.first, ctx_id_idx_pairs.second, std::make_pair(first_ctx, 0),
         [](const auto& a, const auto& b) { return a.first < b.first; });
-    if (start->first >= cr.last_ctx)
+    if (start->first >= last_ctx)
       continue;  // Profile has no data for us, skip
 
     heap.push_back(
-        {start, {cr.pis.get()[i].prof_info_idx, ctx_id_idx_pairs.first->second, vmblob}});
+        {start, {profiles_info[i].prof_info_idx, ctx_id_idx_pairs.first->second, vmblob}});
   }
   heap.shrink_to_fit();
   std::make_heap(heap.begin(), heap.end(), heap_comp);
@@ -1048,7 +1055,7 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
   // our search so we can jump straight to the next context we want.
   const auto first_ctx_id = heap.front().first->first;
   std::vector<char> buf;
-  while (!heap.empty() && heap.front().first->first < cr.last_ctx) {
+  while (!heap.empty() && heap.front().first->first < last_ctx) {
     const uint32_t ctx_id = heap.front().first->first;
     std::map<uint16_t, std::vector<char>> valuebufs;
     uint64_t allpvs = 0;
@@ -1077,7 +1084,7 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
 
       // If the updated entry is still in range, push it back into the heap.
       // Otherwise pop the entry from the vector completely.
-      if (heap.back().first->first < cr.last_ctx)
+      if (heap.back().first->first < last_ctx)
         std::push_heap(heap.begin(), heap.end(), heap_comp);
       else
         heap.pop_back();
@@ -1116,7 +1123,7 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
   if (buf.empty())
     return;
   assert(first_ctx_id != LastNodeEnd);
-  auto cmfi = cmf->open(true, true);
+  auto cmfi = cmf.open(true, true);
   cmfi.writeat(ctx_off[first_ctx_id], buf.size(), buf.data());
 }
 
@@ -1133,23 +1140,14 @@ void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
       std::vector<char>                                                 // metric value blob
       >>
       profiles_data(prof_info_list.size());
-  {
-    std::vector<profData> pds;
-    pds.reserve(profiles_data.size());
-    for (size_t i = 0; i < profiles_data.size(); i++) {
-      pds.push_back({
-          .profile_data = profiles_data[i],
-          .pi = prof_info_list[i],
-          .prof_ctx_pairs = all_prof_ctx_pairs[i],
-          .ctx_range = {first_ctx, last_ctx},
-      });
-    }
-    parForPd.fill(std::move(pds), [&](profData& item) { handleItemPd(item); });
-    parForPd.reset();  // Also waits for work to complete
-  }
+  parForPd.fill(profiles_data.size(), [this, &profiles_data, first_ctx, last_ctx](size_t i) {
+    profiles_data[i] =
+        readPartialProfile(first_ctx, last_ctx, *pmf, prof_info_list[i], all_prof_ctx_pairs[i]);
+  });
+  parForPd.reset();  // Also waits for work to complete
 
   // Divide up this ctx group into ranges suitable for distributing to threads.
-  std::vector<ctxRange> crs;
+  std::vector<std::pair<uint32_t, uint32_t>> crs;
   {
     crs.reserve(src.teamSize());
     const size_t target = (ctx_off[last_ctx] - ctx_off[first_ctx]) / src.teamSize();
@@ -1161,28 +1159,20 @@ void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
 
       cursize += ctx_off[id + 1] - ctx_off[id];
       if (cursize > target) {
-        crs.push_back({
-            .first_ctx = !crs.empty() ? crs.back().last_ctx : first_ctx,
-            .last_ctx = id + 1,
-            .pd = profiles_data,
-            .pis = prof_info_list,
-        });
+        crs.push_back({!crs.empty() ? crs.back().second : first_ctx, id + 1});
         cursize = 0;
       }
     }
-    if (crs.empty() || crs.back().last_ctx < last_ctx) {
+    if (crs.empty() || crs.back().second < last_ctx) {
       // Last range takes whatever remains
-      crs.push_back({
-          .first_ctx = !crs.empty() ? crs.back().last_ctx : first_ctx,
-          .last_ctx = last_ctx,
-          .pd = profiles_data,
-          .pis = prof_info_list,
-      });
+      crs.push_back({!crs.empty() ? crs.back().second : first_ctx, last_ctx});
     }
   }
 
   // Handle the individual ctx copies
-  parForCtxs.fill(std::move(crs), [&](ctxRange& item) { handleItemCtxs(item); });
+  parForCtxs.fill(std::move(crs), [this, &profiles_data](const auto& range) {
+    writeContexts(range.first, range.second, *cmf, profiles_data, prof_info_list, ctx_off);
+  });
   parForCtxs.reset();
 }
 
