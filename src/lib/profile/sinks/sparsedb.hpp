@@ -196,7 +196,11 @@ private:
 
   // helper - extract one profile data
   struct profData {
-    std::reference_wrapper<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>
+    std::reference_wrapper<std::pair<
+        std::pair<
+            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
+            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,
+        std::vector<char>>>
         profile_data;
     std::reference_wrapper<const pms_profile_info_t> pi;
     std::reference_wrapper<const std::vector<std::pair<uint32_t, uint64_t>>> prof_ctx_pairs;
@@ -204,18 +208,17 @@ private:
   };
   hpctoolkit::util::ResettableParallelForEach<profData> parForPd;
 
-  std::vector<std::pair<uint32_t, uint64_t>> filterCtxPairs(
-      std::pair<uint32_t, uint32_t> ctx_range,
-      const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs);
-
   void handleItemPd(profData& pd);
 
   struct ctxRange {
     uint32_t first_ctx;
     uint32_t last_ctx;
 
-    std::reference_wrapper<
-        const std::vector<std::pair<std::vector<std::pair<uint32_t, uint64_t>>, std::vector<char>>>>
+    std::reference_wrapper<const std::vector<std::pair<
+        std::pair<
+            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
+            std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,
+        std::vector<char>>>>
         pd;
     std::reference_wrapper<const std::vector<pms_profile_info_t>> pis;
   };

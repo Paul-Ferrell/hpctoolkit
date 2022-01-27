@@ -971,11 +971,16 @@ void SparseDB::handleItemCiip(profCtxIdIdxPairs& ciip) {
   }
 }
 
-std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
-    std::pair<uint32_t, uint32_t> ctx_range,
-    const std::vector<std::pair<uint32_t, uint64_t>>& profile_ctx_pairs) {
-  if (profile_ctx_pairs.size() <= 1 || ctx_range.first >= ctx_range.second)
-    return {};
+void SparseDB::handleItemPd(profData& pd) {
+  auto& prof_data = pd.profile_data.get();
+  const auto& ctx_pairs = pd.prof_ctx_pairs.get();
+
+  if (ctx_pairs.size() <= 1 || pd.ctx_range.first >= pd.ctx_range.second) {
+    // Empty range, we don't have any data to add.
+    prof_data.first = {ctx_pairs.begin(), ctx_pairs.begin()};
+    prof_data.second.clear();
+    return;
+  }
 
   // Compare a range of ctx_ids [first, second) to a ctx_id/idx pair.
   // ctx_ids within [first, second) compare "equal".
@@ -989,33 +994,18 @@ std::vector<std::pair<uint32_t, uint64_t>> SparseDB::filterCtxPairs(
 
   // Binary search for the [first, last) range among this profile's pairs.
   // Skip the last pair, which is always LastNodeEnd.
-  auto [first, last] =
-      std::equal_range(profile_ctx_pairs.begin(), --profile_ctx_pairs.end(), ctx_range, compare{});
-  std::vector<ci_pair> out(first, last);
-
-  // Last pair is always LastNodeEnd
-  out.emplace_back(LastNodeEnd, last->second);
-  return out;
-}
-
-void SparseDB::handleItemPd(profData& pd) {
-  // Extract the ctx_id/idx pairs that we need for this blob
-  auto pairs = filterCtxPairs(pd.ctx_range, pd.prof_ctx_pairs);
+  prof_data.first = std::equal_range(ctx_pairs.begin(), --ctx_pairs.end(), pd.ctx_range, compare{});
+  const auto first_idx = prof_data.first.first->second;
+  const auto last_idx = prof_data.first.second->second;
 
   // Read the blob of data containing all our pairs
   std::vector<char> blob;
-  if (pairs.size() > 1) {
-    blob.resize((pairs.back().second - pairs.front().second) * PMS_vm_pair_SIZE);
-    assert(!blob.empty());
+  blob.resize((last_idx - first_idx) * PMS_vm_pair_SIZE);
+  assert(!blob.empty());
 
-    auto pmfi = pmf->open(false, false);
-    pmfi.readat(
-        pd.pi.get().offset + pairs.front().second * PMS_vm_pair_SIZE, blob.size(), blob.data());
-  }
-
-  // Update the profData with the data we gathered
-  pd.profile_data.get().first = std::move(pairs);
-  pd.profile_data.get().second = std::move(blob);
+  auto pmfi = pmf->open(false, false);
+  pmfi.readat(pd.pi.get().offset + first_idx * PMS_vm_pair_SIZE, blob.size(), blob.data());
+  prof_data.second = std::move(blob);
 }
 
 //
@@ -1041,16 +1031,17 @@ void SparseDB::handleItemCtxs(ctxRange& cr) {
   heap.reserve(cr.pd.get().size());
   for (size_t i = 0; i < cr.pd.get().size(); i++) {
     const auto& [ctx_id_idx_pairs, vmblob] = cr.pd.get()[i];
-    if (ctx_id_idx_pairs.empty())
+    if (ctx_id_idx_pairs.first == ctx_id_idx_pairs.second)
       continue;  // Profile is empty, skip
 
     auto start = std::lower_bound(
-        ctx_id_idx_pairs.begin(), ctx_id_idx_pairs.end(), std::make_pair(cr.first_ctx, 0),
+        ctx_id_idx_pairs.first, ctx_id_idx_pairs.second, std::make_pair(cr.first_ctx, 0),
         [](const auto& a, const auto& b) { return a.first < b.first; });
     if (start->first >= cr.last_ctx)
       continue;  // Profile has no data for us, skip
 
-    heap.push_back({start, {cr.pis.get()[i].prof_info_idx, ctx_id_idx_pairs[0].second, vmblob}});
+    heap.push_back(
+        {start, {cr.pis.get()[i].prof_info_idx, ctx_id_idx_pairs.first->second, vmblob}});
   }
   heap.shrink_to_fit();
   std::make_heap(heap.begin(), heap.end(), heap_comp);
@@ -1139,8 +1130,11 @@ void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
 
   // Read the blob of data we need from each profile
   std::vector<std::pair<
-      std::vector<std::pair<uint32_t, uint64_t>>,  // filtered ctx_id/idx pairs
-      std::vector<char>                            // metric value blob
+      std::pair<
+          std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
+          std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,  // ranges of ctx_id/idx
+                                                                        // pairs
+      std::vector<char>                                                 // metric value blob
       >>
       profiles_data(prof_info_list.size());
   {
