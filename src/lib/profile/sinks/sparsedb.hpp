@@ -194,9 +194,6 @@ private:
                                          // group
   hpctoolkit::mpi::SharedAccumulator accCtxGrp;
   hpctoolkit::util::ResettableParallelForEach<std::pair<uint32_t, uint32_t>> parForCtxs;
-
-  void rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx);
-  void rwAllCtxGroup();
 };
 }  // namespace hpctoolkit::sinks
 

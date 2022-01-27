@@ -925,47 +925,6 @@ void SparseDB::cctdbSetUp() {
   }
 }
 
-void SparseDB::writeCCTDB() {
-  if (mpi::World::rank() == 0) {
-    // Rank 0 is in charge of writing the header and context info sections
-    auto cmfi = cmf->open(true, true);
-
-    auto hdr = composeCtxHdr(ctxcnt);
-    cmfi.writeat(0, hdr.size(), hdr.data());
-
-    std::vector<char> buf(ctxcnt * CMS_ctx_info_SIZE);
-    char* cur = buf.data();
-    for (uint32_t i = 0; i < ctxcnt; i++) {
-      uint16_t num_nzmids = ctx_nzmids_cnts[i] - 1;
-      uint64_t num_vals = num_nzmids == 0
-                            ? 0
-                            : (ctx_off[i + 1] - ctx_off[i] - (num_nzmids + 1) * CMS_m_pair_SIZE)
-                                  / CMS_val_prof_idx_pair_SIZE;
-      assert(num_vals == ctx_nzval_cnts[i]);
-      cur = insertCtxInfo(
-          cur, {
-                   .ctx_id = i,
-                   .num_vals = num_vals,
-                   .num_nzmids = num_nzmids,
-                   .offset = ctx_off[i],
-               });
-    }
-    cmfi.writeat(CMS_hdr_SIZE, buf.size(), buf.data());
-  }
-
-  // read and write all the context groups I(rank) am responsible for
-  rwAllCtxGroup();
-
-  // The last rank is in charge of writing the final footer, AFTER all other
-  // writes have completed. If the footer isn't there, the file isn't complete.
-  mpi::barrier();
-  if (mpi::World::rank() + 1 == mpi::World::size()) {
-    const uint64_t footer = CCTDBftr;
-    auto cmfi = cmf->open(true, false);
-    cmfi.writeat(ctx_off.back(), sizeof footer, &footer);
-  }
-}
-
 static std::pair<
     std::pair<
         std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
@@ -1127,68 +1086,103 @@ static void writeContexts(
   cmfi.writeat(ctx_off[first_ctx_id], buf.size(), buf.data());
 }
 
-void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
-  if (first_ctx >= last_ctx)
-    return;
+void SparseDB::writeCCTDB() {
+  if (mpi::World::rank() == 0) {
+    // Rank 0 is in charge of writing the header and context info sections
+    auto cmfi = cmf->open(true, true);
 
-  // Read the blob of data we need from each profile
-  std::vector<std::pair<
-      std::pair<
-          std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
-          std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,  // ranges of ctx_id/idx
-                                                                        // pairs
-      std::vector<char>                                                 // metric value blob
-      >>
-      profiles_data(prof_info_list.size());
-  parForPd.fill(profiles_data.size(), [this, &profiles_data, first_ctx, last_ctx](size_t i) {
-    profiles_data[i] =
-        readPartialProfile(first_ctx, last_ctx, *pmf, prof_info_list[i], all_prof_ctx_pairs[i]);
-  });
-  parForPd.reset();  // Also waits for work to complete
+    auto hdr = composeCtxHdr(ctxcnt);
+    cmfi.writeat(0, hdr.size(), hdr.data());
 
-  // Divide up this ctx group into ranges suitable for distributing to threads.
-  std::vector<std::pair<uint32_t, uint32_t>> crs;
-  {
-    crs.reserve(src.teamSize());
-    const size_t target = (ctx_off[last_ctx] - ctx_off[first_ctx]) / src.teamSize();
-    size_t cursize = 0;
-    for (uint32_t id = first_ctx; id < last_ctx; id++) {
-      // Stop allocating once we have nearly enough ranges
-      if (crs.size() + 1 == src.teamSize())
-        break;
+    std::vector<char> buf(ctxcnt * CMS_ctx_info_SIZE);
+    char* cur = buf.data();
+    for (uint32_t i = 0; i < ctxcnt; i++) {
+      uint16_t num_nzmids = ctx_nzmids_cnts[i] - 1;
+      uint64_t num_vals = num_nzmids == 0
+                            ? 0
+                            : (ctx_off[i + 1] - ctx_off[i] - (num_nzmids + 1) * CMS_m_pair_SIZE)
+                                  / CMS_val_prof_idx_pair_SIZE;
+      assert(num_vals == ctx_nzval_cnts[i]);
+      cur = insertCtxInfo(
+          cur, {
+                   .ctx_id = i,
+                   .num_vals = num_vals,
+                   .num_nzmids = num_nzmids,
+                   .offset = ctx_off[i],
+               });
+    }
+    cmfi.writeat(CMS_hdr_SIZE, buf.size(), buf.data());
+  }
 
-      cursize += ctx_off[id + 1] - ctx_off[id];
-      if (cursize > target) {
-        crs.push_back({!crs.empty() ? crs.back().second : first_ctx, id + 1});
-        cursize = 0;
+  // Transpose and copy context data until we're done
+  uint32_t idx = mpi::World::rank() > 0 ? mpi::World::rank() - 1  // Pre-allocation
+                                        : accCtxGrp.fetch_add(1);
+  while (idx < ctx_group_list.size() - 1) {
+    // Process the next range of contexts allocated to us
+    auto first_ctx = ctx_group_list[idx];
+    auto last_ctx = ctx_group_list[idx + 1];
+    if (first_ctx < last_ctx) {
+      // Read the blob of data we need from each profile, in parallel
+      std::vector<std::pair<
+          std::pair<
+              std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,
+              std::vector<std::pair<uint32_t, uint64_t>>::const_iterator>,  // ranges of ctx_id/idx
+                                                                            // pairs
+          std::vector<char>                                                 // metric value blob
+          >>
+          profiles_data(prof_info_list.size());
+      parForPd.fill(profiles_data.size(), [this, &profiles_data, first_ctx, last_ctx](size_t i) {
+        profiles_data[i] =
+            readPartialProfile(first_ctx, last_ctx, *pmf, prof_info_list[i], all_prof_ctx_pairs[i]);
+      });
+      parForPd.reset();  // Also waits for work to complete
+
+      // Divide up this ctx group into ranges suitable for distributing to threads.
+      std::vector<std::pair<uint32_t, uint32_t>> crs;
+      {
+        crs.reserve(src.teamSize());
+        const size_t target = (ctx_off[last_ctx] - ctx_off[first_ctx]) / src.teamSize();
+        size_t cursize = 0;
+        for (uint32_t id = first_ctx; id < last_ctx; id++) {
+          // Stop allocating once we have nearly enough ranges
+          if (crs.size() + 1 == src.teamSize())
+            break;
+
+          cursize += ctx_off[id + 1] - ctx_off[id];
+          if (cursize > target) {
+            crs.push_back({!crs.empty() ? crs.back().second : first_ctx, id + 1});
+            cursize = 0;
+          }
+        }
+        if (crs.empty() || crs.back().second < last_ctx) {
+          // Last range takes whatever remains
+          crs.push_back({!crs.empty() ? crs.back().second : first_ctx, last_ctx});
+        }
       }
+
+      // Handle the individual ctx copies
+      parForCtxs.fill(std::move(crs), [this, &profiles_data](const auto& range) {
+        writeContexts(range.first, range.second, *cmf, profiles_data, prof_info_list, ctx_off);
+      });
+      parForCtxs.reset();
     }
-    if (crs.empty() || crs.back().second < last_ctx) {
-      // Last range takes whatever remains
-      crs.push_back({!crs.empty() ? crs.back().second : first_ctx, last_ctx});
-    }
+
+    // Fetch the next available workitem from the group
+    idx = accCtxGrp.fetch_add(1);
   }
 
-  // Handle the individual ctx copies
-  parForCtxs.fill(std::move(crs), [this, &profiles_data](const auto& range) {
-    writeContexts(range.first, range.second, *cmf, profiles_data, prof_info_list, ctx_off);
-  });
-  parForCtxs.reset();
-}
-
-void SparseDB::rwAllCtxGroup() {
-  uint32_t idx = mpi::World::rank() > 0 ? mpi::World::rank() - 1 : accCtxGrp.fetch_add(1);
-  uint32_t num_groups = ctx_group_list.size();
-
-  while (idx < num_groups - 1) {
-    rwOneCtxGroup(ctx_group_list[idx], ctx_group_list[idx + 1]);
-    idx = accCtxGrp.fetch_add(
-        1);  // communicate between processes to get next group => "dynamic" load balance
-  }
-
-  parForPd.fill({});  // Make sure the workshare is non-empty
+  // Notify our helper threads that the workshares are complete now
+  parForPd.fill({});
   parForPd.complete();
-
   parForCtxs.fill({});
   parForCtxs.complete();
+
+  // The last rank is in charge of writing the final footer, AFTER all other
+  // writes have completed. If the footer isn't there, the file isn't complete.
+  mpi::barrier();
+  if (mpi::World::rank() + 1 == mpi::World::size()) {
+    const uint64_t footer = CCTDBftr;
+    auto cmfi = cmf->open(true, false);
+    cmfi.writeat(ctx_off.back(), sizeof footer, &footer);
+  }
 }
