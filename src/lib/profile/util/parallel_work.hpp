@@ -82,10 +82,7 @@ struct WorkshareResult final {
 /// contribute their cycles at will and on a whim.
 template<class T> class ParallelForEach {
 public:
-  ParallelForEach(std::function<void(T&)> f, std::size_t blockSize = 1)
-      : action(std::move(f)), blockSize(blockSize),
-        nextitem(std::numeric_limits<std::size_t>::max()),
-        doneitemcnt(std::numeric_limits<std::size_t>::max()){};
+  ParallelForEach() = default;
   ~ParallelForEach() = default;
 
   ParallelForEach(ParallelForEach&&) = delete;
@@ -93,10 +90,16 @@ public:
   ParallelForEach& operator=(ParallelForEach&&) = delete;
   ParallelForEach& operator=(const ParallelForEach&) = delete;
 
-  /// Fill the workqueue with work to be distributed among contributors.
+  /// Fill the workqueue with work to be distributed among contributors,
+  /// as well as set the action to perform on workitems and the blocking size.
   // MT: Externally Synchronized, Internally Synchronized with contribute().
-  void fill(std::vector<T> items) noexcept {
+  void
+  fill(std::vector<T> items, std::function<void(T&)> f = nullptr, std::size_t bs = 0) noexcept {
     workitems = std::move(items);
+    if (f)
+      action = f;
+    if (bs > 0)
+      blockSize = bs;
     doneitemcnt.store(0, std::memory_order_relaxed);
     ANNOTATE_HAPPENS_BEFORE(&nextitem);
     nextitem.store(0, std::memory_order_release);
@@ -162,11 +165,11 @@ public:
   }
 
 private:
-  const std::function<void(T&)> action;
-  const size_t blockSize;
+  std::function<void(T&)> action;
+  std::size_t blockSize = 1;
   std::vector<T> workitems;
-  std::atomic<size_t> nextitem;
-  std::atomic<size_t> doneitemcnt;
+  std::atomic<std::size_t> nextitem{std::numeric_limits<std::size_t>::max()};
+  std::atomic<std::size_t> doneitemcnt{std::numeric_limits<std::size_t>::max()};
 };
 
 /// Variant of ParallelForEach that allows for `reset()` to be called in
@@ -174,9 +177,7 @@ private:
 /// `complete()` has been called (usually by the main thread).
 template<class T> class ResettableParallelForEach : protected ParallelForEach<T> {
 public:
-  template<class... Args>
-  ResettableParallelForEach(Args&&... args)
-      : ParallelForEach<T>(std::forward<Args>(args)...), completed(false){};
+  ResettableParallelForEach() = default;
   ~ResettableParallelForEach() = default;
 
   ResettableParallelForEach(ResettableParallelForEach&&) = delete;
@@ -230,7 +231,7 @@ public:
   }
 
 private:
-  std::atomic<bool> completed;
+  std::atomic<bool> completed{false};
 };
 }  // namespace hpctoolkit::util
 

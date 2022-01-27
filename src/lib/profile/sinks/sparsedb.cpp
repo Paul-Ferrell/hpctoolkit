@@ -194,11 +194,7 @@ static char* insertCtxInfo(char* cur, cms_ctx_info_t ci) {
 }
 
 SparseDB::SparseDB(stdshim::filesystem::path p)
-    : dir(std::move(p)), parForPi([&](pms_profile_info_t& item) { handleItemPi(item); }),
-      accFpos(mpi::Tag::SparseDB_1),
-      parForCiip([&](profCtxIdIdxPairs& item) { handleItemCiip(item); }),
-      parForPd([&](profData& item) { handleItemPd(item); }), accCtxGrp(mpi::Tag::SparseDB_2),
-      parForCtxs([&](ctxRange& item) { handleItemCtxs(item); }) {
+    : dir(std::move(p)), accFpos(mpi::Tag::SparseDB_1), accCtxGrp(mpi::Tag::SparseDB_2) {
   if (dir.empty())
     util::log::fatal{} << "SparseDB doesn't allow for dry runs!";
   else
@@ -733,7 +729,7 @@ void SparseDB::handleItemPi(pms_profile_info_t& pi) {
 }
 
 void SparseDB::writeProfInfos() {
-  parForPi.fill(std::move(prof_infos));
+  parForPi.fill(std::move(prof_infos), [&](pms_profile_info_t& item) { handleItemPi(item); });
   parForPi.contribute(parForPi.wait());
 }
 
@@ -904,7 +900,7 @@ void SparseDB::cctdbSetUp() {
     ciips.reserve(prof_info_list.size());
     for (size_t i = 0; i < prof_info_list.size(); i++)
       ciips.push_back({all_prof_ctx_pairs[i], prof_info_list[i]});
-    parForCiip.fill(std::move(ciips));
+    parForCiip.fill(std::move(ciips), [&](profCtxIdIdxPairs& item) { handleItemCiip(item); });
     parForCiip.contribute(parForCiip.wait());
   }
 }
@@ -1148,7 +1144,7 @@ void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
           .ctx_range = {first_ctx, last_ctx},
       });
     }
-    parForPd.fill(std::move(pds));
+    parForPd.fill(std::move(pds), [&](profData& item) { handleItemPd(item); });
     parForPd.reset();  // Also waits for work to complete
   }
 
@@ -1186,7 +1182,7 @@ void SparseDB::rwOneCtxGroup(uint32_t first_ctx, uint32_t last_ctx) {
   }
 
   // Handle the individual ctx copies
-  parForCtxs.fill(std::move(crs));
+  parForCtxs.fill(std::move(crs), [&](ctxRange& item) { handleItemCtxs(item); });
   parForCtxs.reset();
 }
 
