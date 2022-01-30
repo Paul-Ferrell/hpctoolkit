@@ -192,6 +192,20 @@ static char* insertIdTuple(char* cur, const id_tuple_t& tuple) {
   return cur;
 }
 
+static std::array<char, PMS_prof_info_SIZE> composeProfInfo(const pms_profile_info_t& pi) {
+  std::array<char, PMS_prof_info_SIZE> buf;
+  char* cur = buf.data();
+
+  cur = insertByte8(cur, pi.id_tuple_ptr);
+  cur = insertByte8(cur, pi.metadata_ptr);
+  cur = insertByte8(cur, pi.spare_one);
+  cur = insertByte8(cur, pi.spare_two);
+  cur = insertByte8(cur, pi.num_vals);
+  cur = insertByte4(cur, pi.num_nzctxs);
+  cur = insertByte8(cur, pi.offset);
+  return buf;
+}
+
 static pms_profile_info_t parseProfInfo(const char* input) {
   pms_profile_info_t pi;
   pi.id_tuple_ptr = interpretByte8(input);
@@ -408,7 +422,20 @@ void SparseDB::write() {
   }
 
   // write prof_infos, no summary yet
-  writeProfInfos();
+  {
+    std::vector<std::reference_wrapper<const pms_profile_info_t>> prof_infos;
+    prof_infos.reserve(src.threads().size());
+    for (const auto& t : src.threads().citerate())
+      prof_infos.push_back(t->userdata[ud].info);
+
+    parForPi.fill(std::move(prof_infos), [&](const pms_profile_info_t& pi) {
+      auto buf = composeProfInfo(pi);
+      auto fhi = pmf->open(true, false);
+      fhi.writeat(
+          prof_info_sec_ptr + pi.prof_info_idx * PMS_prof_info_SIZE, buf.size(), buf.data());
+    });
+    parForPi.contribute(parForPi.wait());
+  }
 
   // gather cct major data
   ctxcnt = mpi::bcast(contexts.size(), 0);
@@ -509,8 +536,12 @@ void SparseDB::write() {
     pmfi.writeat(wrt_off, sparse_metrics_bytes.size(), sparse_metrics_bytes.data());
     summary_info.offset = wrt_off;
 
-    // write prof_info for summary
-    handleItemPi(summary_info);
+    // write prof_info for summary, which is always index 0
+    {
+      auto buf = composeProfInfo(summary_info);
+      auto fhi = pmf->open(true, false);
+      fhi.writeat(prof_info_sec_ptr, buf.size(), buf.data());
+    }
 
     // footer to show completeness
     // auto pmfi = pmf->open(true, false);
@@ -640,46 +671,6 @@ void SparseDB::workIdTuplesSection() {
   // Set the section size based on the sizes everyone contributes
   // Rank 0 handles the file header, so only Rank 0 needs to know
   id_tuples_sec_size = mpi::reduce(buf.size(), 0, mpi::Op::sum());
-}
-
-void SparseDB::handleItemPi(const pms_profile_info_t& pi) {
-  std::vector<char> info_bytes;
-
-  auto b = convertToByte8(pi.id_tuple_ptr);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  b = convertToByte8(pi.metadata_ptr);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  b = convertToByte8(pi.spare_one);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  b = convertToByte8(pi.spare_two);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  b = convertToByte8(pi.num_vals);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  b = convertToByte4(pi.num_nzctxs);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  b = convertToByte8(pi.offset);
-  info_bytes.insert(info_bytes.end(), b.begin(), b.end());
-
-  auto fhi = pmf->open(true, false);
-  fhi.writeat(
-      prof_info_sec_ptr + pi.prof_info_idx * PMS_prof_info_SIZE, PMS_prof_info_SIZE,
-      info_bytes.data());
-}
-
-void SparseDB::writeProfInfos() {
-  std::vector<std::reference_wrapper<const pms_profile_info_t>> prof_infos;
-  prof_infos.reserve(src.threads().size());
-  for (const auto& t : src.threads().citerate())
-    prof_infos.push_back(t->userdata[ud].info);
-
-  parForPi.fill(std::move(prof_infos), [&](const pms_profile_info_t& item) { handleItemPi(item); });
-  parForPi.contribute(parForPi.wait());
 }
 
 //

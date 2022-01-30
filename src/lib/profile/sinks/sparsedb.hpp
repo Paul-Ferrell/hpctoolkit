@@ -131,9 +131,6 @@ private:
   // prof info
   hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>> parForPi;
 
-  void handleItemPi(const pms_profile_info_t& pi);
-  void writeProfInfos();
-
   // help write profiles in notifyWavefront, notifyThreadFinal, write
   hpctoolkit::mpi::SharedAccumulator accFpos;
 
