@@ -1242,6 +1242,7 @@ inst_accesses_callers_mem(xed_decoded_inst_t *xptr)
                    break;
 		default:
 		   assert(0 && "unexpected number of memory operands");
+		   std::abort();
 	}
 	if (not_my_mem) return true;
 	return false;

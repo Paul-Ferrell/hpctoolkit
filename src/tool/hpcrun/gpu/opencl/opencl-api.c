@@ -762,7 +762,8 @@ opencl_subscriber_callback
       }
 
     default:
-      assert(0);
+      assert(false && "Invalid activity kind!");
+      abort();
   }
 
   cct_node_t *api_node =

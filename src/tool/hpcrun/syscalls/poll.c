@@ -109,7 +109,8 @@ find_poll(void)
   real_poll = (poll_fn *) dlsym(RTLD_NEXT, "poll");
 #endif
 
-  assert(real_poll);
+  if(real_poll == NULL)
+    abort();  // poll is not available
 }
 
 

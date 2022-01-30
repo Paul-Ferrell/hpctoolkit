@@ -288,7 +288,8 @@ ompt_buffer_request
 {
   *bytes = BUFFER_SIZE;
   *buffer = (ompt_buffer_t *)malloc(*bytes);
-  assert(buffer);
+  if(!*buffer)
+    abort();  // OOM
 }
 
 
