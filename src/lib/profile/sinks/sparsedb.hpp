@@ -125,11 +125,7 @@ private:
   uint64_t prof_info_sec_size;
   uint64_t prof_info_sec_ptr;
 
-  void writePMSHdr(const uint32_t total_num_prof, const hpctoolkit::util::File& fh);
-
   // id tuples
-  std::vector<char> convertTuple2Bytes(const id_tuple_t& tuple);
-  void writeIdTuples(std::vector<id_tuple_t>& id_tuples, uint64_t my_offset);
   void workIdTuplesSection();
 
   // prof info

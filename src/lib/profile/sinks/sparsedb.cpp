@@ -158,6 +158,50 @@ static std::vector<char> convertToByte8(uint64_t val) {
   return bytes;
 }
 
+static std::array<char, PMS_real_hdr_SIZE> composeProfHdr(
+    uint32_t nProf, uint64_t profInfoPtr, uint64_t profInfoSize, uint64_t idTuplesPtr,
+    uint64_t idTuplesSize) {
+  std::array<char, PMS_real_hdr_SIZE> out;
+  char* cur = out.data();
+  cur = std::copy(
+      HPCPROFILESPARSE_FMT_Magic, HPCPROFILESPARSE_FMT_Magic + HPCPROFILESPARSE_FMT_MagicLen, cur);
+  *(cur++) = HPCPROFILESPARSE_FMT_VersionMajor;
+  *(cur++) = HPCPROFILESPARSE_FMT_VersionMinor;
+
+  cur = insertByte4(cur, nProf);
+  cur = insertByte2(cur, HPCPROFILESPARSE_FMT_NumSec);
+  cur = insertByte8(cur, profInfoSize);
+  cur = insertByte8(cur, profInfoPtr);
+  cur = insertByte8(cur, idTuplesSize);
+  cur = insertByte8(cur, idTuplesPtr);
+  return out;
+}
+
+static size_t sizeofIdTuple(const id_tuple_t& tuple) {
+  return PMS_id_tuple_len_SIZE + tuple.length * PMS_id_SIZE;
+}
+
+static char* insertIdTuple(char* cur, const id_tuple_t& tuple) {
+  cur = insertByte2(cur, (uint16_t)tuple.length);
+  for (unsigned int i = 0; i < tuple.length; i++) {
+    const auto& id = tuple.ids[i];
+    cur = insertByte2(cur, id.kind);
+    cur = insertByte8(cur, id.physical_index);
+    cur = insertByte8(cur, id.logical_index);
+  }
+  return cur;
+}
+
+static std::vector<char> composeIdTuples(const std::vector<id_tuple_t>& tuples) {
+  std::vector<char> buf;
+  for (const auto& tuple : tuples) {
+    auto oldsz = buf.size();
+    buf.resize(oldsz + sizeofIdTuple(tuple), 0);
+    insertIdTuple(&buf[oldsz], tuple);
+  }
+  return buf;
+}
+
 static pms_profile_info_t parseProfInfo(const char* input) {
   pms_profile_info_t pi;
   pi.id_tuple_ptr = interpretByte8(input);
@@ -267,8 +311,11 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   workIdTuplesSection();  // write id_tuples, set id_tuples_sec_size for hdr
 
   // Rank 0 writes out the file header, now that everything has been laid out
-  if (mpi::World::rank() == 0)
-    writePMSHdr(nProf, *pmf);  // write hdr
+  if (mpi::World::rank() == 0) {
+    auto buf = composeProfHdr(
+        nProf, prof_info_sec_ptr, prof_info_sec_size, id_tuples_sec_ptr, id_tuples_sec_size);
+    pmf->open(true, false).writeat(0, buf.size(), buf.data());
+  }
 
   // prep for profiles writing
   prof_infos.resize(myNProf);  // prepare for prof infos
@@ -560,76 +607,8 @@ void SparseDB::write() {
 //***************************************************************************
 
 //
-// hdr
-//
-void SparseDB::writePMSHdr(const uint32_t total_num_prof, const util::File& fh) {
-  std::vector<char> hdr;
-
-  hdr.insert(
-      hdr.end(), HPCPROFILESPARSE_FMT_Magic,
-      HPCPROFILESPARSE_FMT_Magic + HPCPROFILESPARSE_FMT_MagicLen);
-
-  hdr.emplace_back(HPCPROFILESPARSE_FMT_VersionMajor);
-  hdr.emplace_back(HPCPROFILESPARSE_FMT_VersionMinor);
-
-  auto b = convertToByte4(total_num_prof);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  b = convertToByte2(HPCPROFILESPARSE_FMT_NumSec);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  b = convertToByte8(prof_info_sec_size);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-  b = convertToByte8(prof_info_sec_ptr);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  b = convertToByte8(id_tuples_sec_size);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-  b = convertToByte8(id_tuples_sec_ptr);
-  hdr.insert(hdr.end(), b.begin(), b.end());
-
-  assert(hdr.size() == PMS_real_hdr_SIZE);
-  auto fhi = fh.open(true, false);
-  fhi.writeat(0, PMS_real_hdr_SIZE, hdr.data());
-}
-
-//
 // id tuples
 //
-std::vector<char> SparseDB::convertTuple2Bytes(const id_tuple_t& tuple) {
-  std::vector<char> bytes;
-
-  uint16_t len = tuple.length;
-  auto b = convertToByte2(len);
-  bytes.insert(bytes.end(), b.begin(), b.end());
-
-  for (uint i = 0; i < len; i++) {
-    auto& id = tuple.ids[i];
-
-    b = convertToByte2(id.kind);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-    b = convertToByte8(id.physical_index);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-    b = convertToByte8(id.logical_index);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-  }
-
-  assert(bytes.size() == (size_t)PMS_id_tuple_len_SIZE + len * PMS_id_SIZE);
-  return bytes;
-}
-
-void SparseDB::writeIdTuples(std::vector<id_tuple_t>& id_tuples, uint64_t my_offset) {
-  // convert to bytes
-  std::vector<char> bytes;
-  for (auto& tuple : id_tuples) {
-    auto b = convertTuple2Bytes(tuple);
-    bytes.insert(bytes.end(), b.begin(), b.end());
-  }
-
-  auto fhi = pmf->open(true, false);
-  fhi.writeat(id_tuples_sec_ptr + my_offset, bytes.size(), bytes.data());
-}
-
 void SparseDB::workIdTuplesSection() {
   int local_num_prof = src.threads().size();
   if (mpi::World::rank() == 0)
@@ -675,7 +654,11 @@ void SparseDB::workIdTuplesSection() {
   my_offset = mpi::exscan(local_tuples_size, mpi::Op::sum()).value_or(0);
 
   // write out id_tuples
-  writeIdTuples(id_tuples, my_offset);
+  {
+    auto buf = composeIdTuples(id_tuples);
+    auto fhi = pmf->open(true, false);
+    fhi.writeat(id_tuples_sec_ptr + my_offset, buf.size(), buf.data());
+  }
 
   // set class variable, will be output in hdr
   id_tuples_sec_size = mpi::allreduce(local_tuples_size, mpi::Op::sum());
