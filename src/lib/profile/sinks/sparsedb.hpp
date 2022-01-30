@@ -145,11 +145,10 @@ private:
   std::mutex outputs_l;
 
   // help collect cct major data
-  std::vector<uint64_t> ctx_nzval_cnts;
   std::vector<uint16_t> ctx_nzmids_cnts;
 
   struct udContext {
-    std::atomic<uint64_t> cnt = 0;
+    std::atomic<uint64_t> nValues = 0;
   };
   struct udThread {
     pms_profile_info_t info = {

@@ -345,7 +345,7 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
     if (auto accums = tt.accumulatorsFor(c)) {
       // Add the ctx_id/idx pair for this Context
       addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
-      size_t values = 0;
+      size_t nValues = 0;
 
       for (const auto& mx : accums->citerate()) {
         const Metric& m = mx.first;
@@ -355,12 +355,12 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
         const auto& id = m.userdata[src.identifier()];
         if (auto vex = vv.get(MetricScope::function)) {
           addMvPair(id.getFor(MetricScope::function), *vex);
-          values++;
+          nValues++;
           // HACK conditional to work around experiment.xml. Line Scopes are
           // emitted as leaves (<S>), so they should have no extra inclusive cost.
           if (c.scope().flat().type() == Scope::Type::line) {
             addMvPair(id.getFor(MetricScope::execution), *vex);
-            values++;
+            nValues++;
           }
         }
         // HACK conditional to work around experiment.xml. Line Scopes are
@@ -368,14 +368,14 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
         if (c.scope().flat().type() != Scope::Type::line) {
           if (auto vinc = vv.get(MetricScope::execution)) {
             addMvPair(id.getFor(MetricScope::execution), *vinc);
-            values++;
+            nValues++;
           }
         }
       }
-      c.userdata[ud].cnt.fetch_add(values);
+      c.userdata[ud].nValues.fetch_add(nValues, std::memory_order_relaxed);
       // HACK conditional to support the above HACKs. Its now possible (although
       // hopefully rare) for a Context to have no metric values.
-      if (values == 0)
+      if (nValues == 0)
         ciPairsBuf.resize(ciPairsBuf.size() - PMS_ctx_pair_SIZE);
     }
   }
@@ -425,10 +425,6 @@ void SparseDB::write() {
   // gather cct major data
   ctxcnt = mpi::bcast(contexts.size(), 0);
   ctx_nzmids_cnts.resize(ctxcnt, 1);  // one for LastNodeEnd
-  ctx_nzval_cnts.resize(ctxcnt, 0);
-  for (const Context& c : contexts)
-    ctx_nzval_cnts[c.userdata[src.identifier()]] =
-        c.userdata[ud].cnt.load(std::memory_order_relaxed);
 
   if (mpi::World::rank() == 0) {
     // Allocate the blobs needed for the final output
@@ -749,8 +745,10 @@ readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
 void SparseDB::cctdbSetUp() {
   // Lay out the cct.db metric data section, last is total size.
   ctxOffsets = std::vector<uint64_t>(ctxcnt + 1, 0);
-  for (size_t i = 0; i < ctxcnt; i++) {
-    ctxOffsets[i] = ctx_nzval_cnts[i] * CMS_val_prof_idx_pair_SIZE;
+  for (const Context& c : contexts) {
+    const auto i = c.userdata[src.identifier()];
+    ctxOffsets[i] =
+        c.userdata[ud].nValues.load(std::memory_order_relaxed) * CMS_val_prof_idx_pair_SIZE;
     // ????
     if (mpi::World::rank() == 0 && ctx_nzmids_cnts[i] > 1)
       ctxOffsets[i] += ctx_nzmids_cnts[i] * CMS_m_pair_SIZE;
@@ -990,7 +988,6 @@ void SparseDB::writeCCTDB() {
                          ? 0
                          : (ctxOffsets[i + 1] - ctxOffsets[i] - (nMetrics + 1) * CMS_m_pair_SIZE)
                                / CMS_val_prof_idx_pair_SIZE;
-      assert(nVals == ctx_nzval_cnts[i]);
       cur = insertCtxInfo(
           cur, {
                    .ctx_id = i,
