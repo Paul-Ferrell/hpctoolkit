@@ -295,28 +295,88 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
     myNProf++;  // Counting the summary profile
   auto nProf = mpi::allreduce(myNProf, mpi::Op::sum());
 
-  // Lay out some bits of the profile.db
-  prof_info_sec_ptr = PMS_hdr_SIZE;
-  prof_info_sec_size = nProf * PMS_prof_info_SIZE;
-  id_tuples_sec_ptr = prof_info_sec_ptr + MULTIPLE_8(prof_info_sec_size);
+  // Allocate space for the profile infos section
+  uint64_t profInfosSize = nProf * PMS_prof_info_SIZE;
 
-  workIdTuplesSection();  // write id_tuples, set id_tuples_sec_size for hdr
+  // Write out our part of the id tuples section, and figure out its final size
+  uint64_t idTuplesPtr = profInfosPtr + MULTIPLE_8(profInfosSize);
+  uint64_t idTuplesSize;
+  {
+    std::vector<char> buf;
+    if (mpi::World::rank() == 0) {
+      // Rank 0 handles the summary profile('s id tuple)
+      pms_id_t sumId = {
+          .kind = IDTUPLE_SUMMARY,
+          .physical_index = IDTUPLE_SUMMARY_IDX,
+          .logical_index = IDTUPLE_SUMMARY_IDX,
+      };
+      id_tuple_t idt = {
+          .length = IDTUPLE_SUMMARY_LENGTH,
+          .ids = &sumId,
+      };
 
-  // Rank 0 writes out the file header, now that everything has been laid out
+      // Append to the end of the blob
+      auto oldsz = buf.size();
+      buf.resize(oldsz + sizeofIdTuple(idt), 0);
+      insertIdTuple(&buf[oldsz], idt);
+
+      // Save the local offset in the pointer field
+      summary_info.id_tuple_ptr = oldsz;
+    }
+
+    // Threads within each block are sorted by identifier. TODO: Remove this
+    std::vector<std::reference_wrapper<const Thread>> threads;
+    threads.reserve(src.threads().size());
+    for (const auto& t : src.threads().citerate())
+      threads.push_back(*t);
+    std::sort(threads.begin(), threads.end(), [&](const Thread& a, const Thread& b) {
+      return a.userdata[src.identifier()] < b.userdata[src.identifier()];
+    });
+
+    // Construct id tuples for each Thread in turn
+    for (const Thread& t : threads) {
+      // Id tuple for t
+      id_tuple_t idt = {
+          .length = (uint16_t)t.attributes.idTuple().size(),
+          .ids = const_cast<pms_id_t*>(t.attributes.idTuple().data()),
+      };
+
+      // Append to the end of the blob
+      auto oldsz = buf.size();
+      buf.resize(oldsz + sizeofIdTuple(idt), 0);
+      insertIdTuple(&buf[oldsz], idt);
+
+      // Save the local offset in the pointers
+      t.userdata[ud].info.id_tuple_ptr = oldsz;
+    }
+
+    // Determine the offset of our blob, update the pointers and write it out.
+    uint64_t offset = mpi::exscan<uint64_t>(buf.size(), mpi::Op::sum()).value_or(0);
+    summary_info.id_tuple_ptr += idTuplesPtr + offset;
+    for (const auto& t : src.threads().citerate())
+      t->userdata[ud].info.id_tuple_ptr += idTuplesPtr + offset;
+    auto fhi = pmf->open(true, false);
+    fhi.writeat(idTuplesPtr + offset, buf.size(), buf.data());
+
+    // Set the section size based on the sizes everyone contributes
+    // Rank 0 handles the file header, so only Rank 0 needs to know
+    idTuplesSize = mpi::reduce(buf.size(), 0, mpi::Op::sum());
+  }
+
+  // Rank 0 writes out the final file header
   if (mpi::World::rank() == 0) {
-    auto buf = composeProfHdr(
-        nProf, prof_info_sec_ptr, prof_info_sec_size, id_tuples_sec_ptr, id_tuples_sec_size);
+    auto buf = composeProfHdr(nProf, profInfosPtr, profInfosSize, idTuplesPtr, idTuplesSize);
     pmf->open(true, false).writeat(0, buf.size(), buf.data());
   }
 
+  // Initialize the double-buffered output scheme for profile data
   obuffers = std::vector<OutBuffer>(2);  // prepare for prof data
   obuffers[0].cur_pos = 0;
   obuffers[1].cur_pos = 0;
   cur_obuf_idx = 0;
-
   accFpos.initialize(
-      id_tuples_sec_ptr
-      + MULTIPLE_8(id_tuples_sec_size));  // start the window to keep track of the real file cursor
+      idTuplesPtr
+      + MULTIPLE_8(idTuplesSize));  // start the window to keep track of the real file cursor
 }
 
 void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
@@ -416,8 +476,7 @@ void SparseDB::write() {
     parForPi.fill(std::move(prof_infos), [&](const pms_profile_info_t& pi) {
       auto buf = composeProfInfo(pi);
       auto fhi = pmf->open(true, false);
-      fhi.writeat(
-          prof_info_sec_ptr + pi.prof_info_idx * PMS_prof_info_SIZE, buf.size(), buf.data());
+      fhi.writeat(profInfosPtr + pi.prof_info_idx * PMS_prof_info_SIZE, buf.size(), buf.data());
     });
     parForPi.contribute(parForPi.wait());
   }
@@ -506,7 +565,7 @@ void SparseDB::write() {
     {
       auto buf = composeProfInfo(summary_info);
       auto fhi = pmf->open(true, false);
-      fhi.writeat(prof_info_sec_ptr, buf.size(), buf.data());
+      fhi.writeat(profInfosPtr, buf.size(), buf.data());
     }
 
     // footer to show completeness
@@ -569,74 +628,6 @@ void SparseDB::write() {
 ///...
 /// PROFILEDB FOOTER CORRECT, FILE COMPLETE
 //***************************************************************************
-
-//
-// id tuples
-//
-void SparseDB::workIdTuplesSection() {
-  std::vector<char> buf;
-  if (mpi::World::rank() == 0) {
-    // Rank 0 handles the summary profile('s id tuple)
-    pms_id_t sumId = {
-        .kind = IDTUPLE_SUMMARY,
-        .physical_index = IDTUPLE_SUMMARY_IDX,
-        .logical_index = IDTUPLE_SUMMARY_IDX,
-    };
-    id_tuple_t idt = {
-        .length = IDTUPLE_SUMMARY_LENGTH,
-        .ids = &sumId,
-    };
-
-    // Append to the end of the blob
-    auto oldsz = buf.size();
-    buf.resize(oldsz + sizeofIdTuple(idt), 0);
-    insertIdTuple(&buf[oldsz], idt);
-
-    // Save the local offset in the pointer field
-    summary_info.id_tuple_ptr = oldsz;
-  }
-
-  // Threads within each block are sorted by identifier. TODO: Remove this
-  std::vector<std::reference_wrapper<const Thread>> threads;
-  threads.reserve(src.threads().size());
-  for (const auto& t : src.threads().citerate())
-    threads.push_back(*t);
-  std::sort(threads.begin(), threads.end(), [&](const Thread& a, const Thread& b) {
-    return a.userdata[src.identifier()] < b.userdata[src.identifier()];
-  });
-
-  // Construct id tuples for each Thread in turn
-  for (const Thread& t : threads) {
-    // Id tuple for t
-    id_tuple_t idt = {
-        .length = (uint16_t)t.attributes.idTuple().size(),
-        .ids = const_cast<pms_id_t*>(t.attributes.idTuple().data()),
-    };
-
-    // Append to the end of the blob
-    auto oldsz = buf.size();
-    buf.resize(oldsz + sizeofIdTuple(idt), 0);
-    insertIdTuple(&buf[oldsz], idt);
-
-    // Save the local offset in the pointers
-    t.userdata[ud].info.id_tuple_ptr = oldsz;
-  }
-
-  // Determine the offset of our blob, update the pointers and write it out.
-  uint64_t offset = mpi::exscan<uint64_t>(buf.size(), mpi::Op::sum()).value_or(0);
-  summary_info.id_tuple_ptr += id_tuples_sec_ptr + offset;
-  for (const auto& t : src.threads().citerate()) {
-    t->userdata[ud].info.id_tuple_ptr += id_tuples_sec_ptr + offset;
-  }
-  {
-    auto fhi = pmf->open(true, false);
-    fhi.writeat(id_tuples_sec_ptr + offset, buf.size(), buf.data());
-  }
-
-  // Set the section size based on the sizes everyone contributes
-  // Rank 0 handles the file header, so only Rank 0 needs to know
-  id_tuples_sec_size = mpi::reduce(buf.size(), 0, mpi::Op::sum());
-}
 
 //
 // write profiles

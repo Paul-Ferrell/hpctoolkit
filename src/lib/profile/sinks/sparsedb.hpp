@@ -119,14 +119,7 @@ private:
 
   std::optional<hpctoolkit::util::File> pmf;
 
-  // hdr
-  uint64_t id_tuples_sec_size;
-  uint64_t id_tuples_sec_ptr;
-  uint64_t prof_info_sec_size;
-  uint64_t prof_info_sec_ptr;
-
-  // id tuples
-  void workIdTuplesSection();
+  static constexpr uint64_t profInfosPtr = PMS_hdr_SIZE;
 
   // prof info
   hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>> parForPi;
