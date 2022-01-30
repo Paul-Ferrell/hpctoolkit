@@ -178,22 +178,34 @@ private:
   //***************************************************************************
   std::optional<hpctoolkit::util::File> cmf;
 
-  // ctx offsets
-  std::vector<uint64_t> ctx_off;
+  // Byte offset of the start for every Context's data in the resulting cct.db.
+  // Indexed by context id. Last element is the total number of bytes in the file.
+  std::vector<uint64_t> ctxOffsets;
 
-  // helper - gather prof infos
-  std::vector<pms_profile_info_t> prof_info_list;
+  // Distribution of contexts into dynamically-allocated groups.
+  // Last element is the total number of contexts.
+  std::vector<uint32_t> ctxGroups;
 
-  // helper - gather ctx id idx pairs
-  hpctoolkit::util::ParallelFor parForCiip;
-  std::vector<std::vector<std::pair<uint32_t, uint64_t>>> all_prof_ctx_pairs;
+  // Shared accumulator to dynamically allocate groups to MPI ranks
+  hpctoolkit::mpi::SharedAccumulator groupCounter;
 
-  hpctoolkit::util::ResettableParallelFor parForPd;
+  // Useful data for a profile in the profile.db.
+  struct ProfileData {
+    // Offset of the data block for this profile in the file
+    uint64_t offset;
+    // Absolute index of this profile
+    uint32_t index;
+    // Preparsed ctx_id/idx pairs
+    std::vector<std::pair<uint32_t, uint64_t>> ctxPairs;
+  };
 
-  std::vector<uint32_t> ctx_group_list;  // each number represents the starting ctx id for this
-                                         // group
-  hpctoolkit::mpi::SharedAccumulator accCtxGrp;
-  hpctoolkit::util::ResettableParallelForEach<std::pair<uint32_t, uint32_t>> parForCtxs;
+  // Data for each of the profiles
+  std::deque<ProfileData> profiles;
+
+  // Parallel workshares for the various parallel operations
+  hpctoolkit::util::ParallelFor forProfilesParse;
+  hpctoolkit::util::ResettableParallelFor forProfilesLoad;
+  hpctoolkit::util::ResettableParallelForEach<std::pair<uint32_t, uint32_t>> forEachContextRange;
 };
 }  // namespace hpctoolkit::sinks
 
