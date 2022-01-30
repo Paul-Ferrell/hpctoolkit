@@ -48,6 +48,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <time.h>
 
 #define NS_PER_SEC 1000000000
@@ -56,8 +57,8 @@ uint64_t hpcrun_nanotime() {
   struct timespec now;
 
   int res = clock_gettime(CLOCK_REALTIME, &now);
-
-  assert(res == 0);
+  if (res != 0)
+    abort();  // clock_gettime failed!
 
   uint64_t now_sec = now.tv_sec;
   uint64_t now_ns = now_sec * NS_PER_SEC + now.tv_nsec;

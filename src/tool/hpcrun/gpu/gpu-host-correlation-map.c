@@ -149,7 +149,7 @@ void gpu_host_correlation_map_insert(
     } else {
       // fatal error: host_correlation id already present; a
       // correlation should be inserted only once.
-      assert(0);
+      abort();
     }
   } else {
     gpu_host_correlation_map_entry_t* entry = gpu_host_correlation_map_entry_new(

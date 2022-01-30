@@ -48,6 +48,7 @@
 #include "lib/prof-lean/splay-uint64.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define DEBUG 0
@@ -118,7 +119,7 @@ void gpu_correlation_id_map_insert(uint32_t gpu_correlation_id, uint64_t host_co
   if (st_lookup(&map_root, gpu_correlation_id)) {
     // fatal error: correlation_id already present; a
     // correlation should be inserted only once.
-    assert(0);
+    abort();
   } else {
     gpu_correlation_id_map_entry_t* entry =
         gpu_correlation_id_map_entry_new(gpu_correlation_id, host_correlation_id);

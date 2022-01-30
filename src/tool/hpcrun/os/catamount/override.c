@@ -47,6 +47,7 @@
 #include <assert.h>
 #include <messages/messages.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 extern void* __real_calloc(size_t nmemb, size_t size);
@@ -90,7 +91,8 @@ void* __wrap_malloc(size_t s) {
   _hpcrun_in_malloc = 1;
   alloc = __real_malloc(s);
   if (hpcrun_need_more) {
-    assert(0);
+    assert(false && "WIP need to allocate more here");
+    abort();
     /* alloc more space here */
     hpcrun_need_more = 0;
   }
@@ -100,5 +102,6 @@ void* __wrap_malloc(size_t s) {
 
 void* __wrap_pthread_create(void* dc) {
   EMSG("Called pthread_create!!");
-  assert(0);
+  assert(false && "pthread_create not allowed");
+  abort();
 }

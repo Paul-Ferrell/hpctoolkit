@@ -167,7 +167,8 @@ void ompt_bind_names(ompt_function_lookup_t lookup) {
 void ompt_callback_buffer_request(int device_id, ompt_buffer_t** buffer, size_t* bytes) {
   *bytes = BUFFER_SIZE;
   *buffer = (ompt_buffer_t*)malloc(*bytes);
-  assert(buffer);
+  if (!*buffer)
+    abort();  // OOM
 }
 
 void ompt_callback_buffer_complete(

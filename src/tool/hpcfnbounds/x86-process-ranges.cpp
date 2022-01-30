@@ -1113,7 +1113,7 @@ static bool inst_accesses_callers_mem(xed_decoded_inst_t* xptr) {
   case 2: not_my_mem |= mem_below_rsp_or_rbp(xptr, 1);
   case 1: not_my_mem |= mem_below_rsp_or_rbp(xptr, 0);
   case 0: break;
-  default: assert(0 && "unexpected number of memory operands");
+  default: assert(0 && "unexpected number of memory operands"); std::abort();
   }
   if (not_my_mem)
     return true;
