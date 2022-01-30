@@ -174,10 +174,10 @@ private:
   };
 
   // write profiles
-  std::vector<char> profBytes(hpcrun_fmt_sparse_metrics_t* sm);
-  uint64_t filePosFetchOp(uint64_t val);
   void flushOutBuffer(uint64_t wrt_off, OutBuffer& ob);
-  uint64_t writeProf(const std::vector<char>& prof_bytes, pms_profile_info_t& prof_info);
+  uint64_t writeProf(
+      const std::vector<char>& mvPairs, const std::vector<char>& ciPairs,
+      pms_profile_info_t& prof_info);
 
   //***************************************************************************
   // cct.db

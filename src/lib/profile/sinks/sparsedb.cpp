@@ -142,22 +142,6 @@ static char* insertByte8(char* bytes, uint64_t val) {
   return bytes + 8;
 }
 
-static std::vector<char> convertToByte2(uint16_t val) {
-  std::vector<char> bytes(2);
-  insertByte2(bytes.data(), val);
-  return bytes;
-}
-static std::vector<char> convertToByte4(uint32_t val) {
-  std::vector<char> bytes(4);
-  insertByte4(bytes.data(), val);
-  return bytes;
-}
-static std::vector<char> convertToByte8(uint64_t val) {
-  std::vector<char> bytes(8);
-  insertByte8(bytes.data(), val);
-  return bytes;
-}
-
 static std::array<char, PMS_real_hdr_SIZE> composeProfHdr(
     uint32_t nProf, uint64_t profInfoPtr, uint64_t profInfoSize, uint64_t idTuplesPtr,
     uint64_t idTuplesSize) {
@@ -204,6 +188,20 @@ static std::array<char, PMS_prof_info_SIZE> composeProfInfo(const pms_profile_in
   cur = insertByte4(cur, pi.num_nzctxs);
   cur = insertByte8(cur, pi.offset);
   return buf;
+}
+
+static char* insertCiPair(char* cur, uint32_t ctx, uint64_t idx) {
+  cur = insertByte4(cur, ctx);
+  cur = insertByte8(cur, idx);
+  return cur;
+}
+
+static char* insertMvPair(char* cur, uint16_t metric, double value) {
+  hpcrun_metricVal_t v;
+  v.r = value;
+  cur = insertByte8(cur, v.bits);
+  cur = insertByte2(cur, metric);
+  return cur;
 }
 
 static pms_profile_info_t parseProfInfo(const char* input) {
@@ -326,87 +324,74 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
   contextWavefront.wait();
 
   // Allocate the blobs needed for the final output
-  std::vector<hpcrun_metricVal_t> values;
-  std::vector<uint16_t> mids;
-  std::vector<uint32_t> cids;
-  std::vector<uint64_t> coffsets;
-  coffsets.reserve(contexts.size() + 1);
-  uint64_t pre_val_size;
+  std::vector<char> mvPairsBuf;
+  std::vector<char> ciPairsBuf;
+  ciPairsBuf.reserve((contexts.size() + 1) * PMS_ctx_pair_SIZE);
+
+  // Helper functions to insert ctx_id/idx pairs and metric/value pairs
+  const auto addCiPair = [&](uint32_t ctxId, uint64_t index) {
+    auto oldsz = ciPairsBuf.size();
+    ciPairsBuf.resize(oldsz + PMS_ctx_pair_SIZE, 0);
+    insertCiPair(&ciPairsBuf[oldsz], ctxId, index);
+  };
+  const auto addMvPair = [&](uint16_t metric, double value) {
+    auto oldsz = mvPairsBuf.size();
+    mvPairsBuf.resize(oldsz + PMS_vm_pair_SIZE, 0);
+    insertMvPair(&mvPairsBuf[oldsz], metric, value);
+  };
 
   // Now stitch together each Context's results
   for (const Context& c : contexts) {
     if (auto accums = tt.accumulatorsFor(c)) {
-      cids.push_back(c.userdata[src.identifier()]);
-      coffsets.push_back(values.size());
-      pre_val_size = values.size();
+      // Add the ctx_id/idx pair for this Context
+      addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
+      size_t values = 0;
+
       for (const auto& mx : accums->citerate()) {
         const Metric& m = mx.first;
         const auto& vv = mx.second;
         if (!m.scopes().has(MetricScope::function) || !m.scopes().has(MetricScope::execution))
           util::log::fatal{} << "Metric isn't function/execution!";
         const auto& id = m.userdata[src.identifier()];
-        hpcrun_metricVal_t v;
         if (auto vex = vv.get(MetricScope::function)) {
-          v.r = *vex;
-          mids.push_back(id.getFor(MetricScope::function));
-          values.push_back(v);
+          addMvPair(id.getFor(MetricScope::function), *vex);
+          values++;
           // HACK conditional to work around experiment.xml. Line Scopes are
           // emitted as leaves (<S>), so they should have no extra inclusive cost.
           if (c.scope().flat().type() == Scope::Type::line) {
-            mids.push_back(id.getFor(MetricScope::execution));
-            values.push_back(v);
+            addMvPair(id.getFor(MetricScope::execution), *vex);
+            values++;
           }
         }
         // HACK conditional to work around experiment.xml. Line Scopes are
         // emitted as leaves (<S>), so they should have no extra inclusive cost.
         if (c.scope().flat().type() != Scope::Type::line) {
           if (auto vinc = vv.get(MetricScope::execution)) {
-            v.r = *vinc;
-            mids.push_back(id.getFor(MetricScope::execution));
-            values.push_back(v);
+            addMvPair(id.getFor(MetricScope::execution), *vinc);
+            values++;
           }
         }
       }
-      c.userdata[ud].cnt += (values.size() - pre_val_size);
+      c.userdata[ud].cnt.fetch_add(values);
       // HACK conditional to support the above HACKs. Its now possible (although
       // hopefully rare) for a Context to have no metric values.
-      if (pre_val_size == values.size()) {
-        cids.pop_back();
-        coffsets.pop_back();
-      }
+      if (values == 0)
+        ciPairsBuf.resize(ciPairsBuf.size() - PMS_ctx_pair_SIZE);
     }
   }
 
   // Add the extra ctx id and offset pair, to mark the end of ctx
-  cids.push_back(LastNodeEnd);
-  coffsets.push_back(values.size());
-
-  // Put together the sparse_metrics structure
-  hpcrun_fmt_sparse_metrics_t sm;
-  sm.id_tuple.length = 0;  // always 0 here
-  sm.num_vals = values.size();
-  sm.num_cct_nodes = contexts.size();
-  sm.num_nz_cct_nodes = coffsets.size() - 1;  // since there is an extra end node
-  sm.values = values.data();
-  sm.mids = mids.data();
-  sm.cct_node_ids = cids.data();
-  sm.cct_node_idxs = coffsets.data();
-
-  // Convert the sparse_metrics structure to binary form
-  auto sparse_metrics_bytes = profBytes(&sm);
-  assert(
-      sparse_metrics_bytes.size()
-      == (values.size() * PMS_vm_pair_SIZE + coffsets.size() * PMS_ctx_pair_SIZE));
+  addCiPair(LastNodeEnd, mvPairsBuf.size() / PMS_vm_pair_SIZE);
 
   // Build prof_info
   auto& pi = t.userdata[ud].info;
   pi.prof_info_idx = t.userdata[src.identifier()] + 1;
-  pi.num_vals = values.size();
-  pi.num_nzctxs = coffsets.size() - 1;
+  pi.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
+  pi.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
 
   // writeProf may flush and update pi, so make sure we don't overwrite it
   pi.offset = 0;
-  pi.offset += writeProf(sparse_metrics_bytes, pi);
+  pi.offset += writeProf(mvPairsBuf, ciPairsBuf, pi);
 }
 
 void SparseDB::write() {
@@ -447,19 +432,27 @@ void SparseDB::write() {
 
   if (mpi::World::rank() == 0) {
     // Allocate the blobs needed for the final output
-    std::vector<hpcrun_metricVal_t> values;
-    std::vector<uint16_t> mids;
-    std::vector<uint32_t> cids;
-    std::vector<uint64_t> coffsets;
-    coffsets.reserve(contexts.size() + 1);
+    std::vector<char> mvPairsBuf;
+    std::vector<char> ciPairsBuf;
+    ciPairsBuf.reserve((contexts.size() + 1) * PMS_ctx_pair_SIZE);
+
+    // Helper functions to insert ctx_id/idx pairs and metric/value pairs
+    const auto addCiPair = [&](uint32_t ctxId, uint64_t index) {
+      auto oldsz = ciPairsBuf.size();
+      ciPairsBuf.resize(oldsz + PMS_ctx_pair_SIZE, 0);
+      insertCiPair(&ciPairsBuf[oldsz], ctxId, index);
+    };
+    const auto addMvPair = [&](uint16_t metric, double value) {
+      auto oldsz = mvPairsBuf.size();
+      mvPairsBuf.resize(oldsz + PMS_vm_pair_SIZE, 0);
+      insertMvPair(&mvPairsBuf[oldsz], metric, value);
+    };
 
     // Now stitch together each Context's results
     for (const Context& c : contexts) {
       const auto& stats = c.data().statistics();
-      if (stats.size() > 0) {
-        cids.push_back(c.userdata[src.identifier()]);
-        coffsets.push_back(values.size());
-      }
+      if (stats.size() > 0)
+        addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
       for (const auto& mx : stats.citerate()) {
         bool hasEx = false;
         bool hasInc = false;
@@ -469,17 +462,13 @@ void SparseDB::write() {
         const auto& id = m.userdata[src.identifier()];
         const auto& vv = mx.second;
         for (const auto& sp : m.partials()) {
-          hpcrun_metricVal_t v;
           if (auto vex = vv.get(sp).get(MetricScope::function)) {
-            v.r = *vex;
-            mids.push_back(id.getFor(sp, MetricScope::function));
-            values.push_back(v);
+            addMvPair(id.getFor(sp, MetricScope::function), *vex);
             hasEx = true;
             // HACK conditional to work around experiment.xml. Line Scopes are
             // emitted as leaves (<S>), so they should have no extra inclusive cost.
             if (c.scope().flat().type() == Scope::Type::line) {
-              mids.push_back(id.getFor(sp, MetricScope::execution));
-              values.push_back(v);
+              addMvPair(id.getFor(sp, MetricScope::execution), *vex);
               hasInc = true;
             }
           }
@@ -487,9 +476,7 @@ void SparseDB::write() {
           // emitted as leaves (<S>), so they should have no extra inclusive cost.
           if (c.scope().flat().type() != Scope::Type::line) {
             if (auto vinc = vv.get(sp).get(MetricScope::execution)) {
-              v.r = *vinc;
-              mids.push_back(id.getFor(sp, MetricScope::execution));
-              values.push_back(v);
+              addMvPair(id.getFor(sp, MetricScope::execution), *vinc);
               hasInc = true;
             }
           }
@@ -506,34 +493,17 @@ void SparseDB::write() {
 
     // SUMMARY
     // Add the extra ctx id and offset pair, to mark the end of ctx
-    cids.push_back(LastNodeEnd);
-    coffsets.push_back(values.size());
-
-    // Put together the sparse_metrics structure
-    hpcrun_fmt_sparse_metrics_t sm;
-    // sm.tid = 0;
-    sm.id_tuple.length = 0;
-    sm.num_vals = values.size();
-    sm.num_cct_nodes = contexts.size();
-    sm.num_nz_cct_nodes = coffsets.size() - 1;  // since there is an extra end node
-    sm.values = values.data();
-    sm.mids = mids.data();
-    sm.cct_node_ids = cids.data();
-    sm.cct_node_idxs = coffsets.data();
+    addCiPair(LastNodeEnd, mvPairsBuf.size() / PMS_vm_pair_SIZE);
 
     // Build prof_info
-    summary_info.num_vals = values.size();
-    summary_info.num_nzctxs = coffsets.size() - 1;
-
-    auto sparse_metrics_bytes = profBytes(&sm);
-    assert(
-        sparse_metrics_bytes.size()
-        == (values.size() * PMS_vm_pair_SIZE + coffsets.size() * PMS_ctx_pair_SIZE));
+    summary_info.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
+    summary_info.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
 
     // write summary data into the current buffer
-    wrt_off = accFpos.fetch_add(sparse_metrics_bytes.size());
+    wrt_off = accFpos.fetch_add(mvPairsBuf.size() + ciPairsBuf.size());
     auto pmfi = pmf->open(true, true);
-    pmfi.writeat(wrt_off, sparse_metrics_bytes.size(), sparse_metrics_bytes.data());
+    pmfi.writeat(wrt_off, mvPairsBuf.size(), mvPairsBuf.data());
+    pmfi.writeat(wrt_off + mvPairsBuf.size(), ciPairsBuf.size(), ciPairsBuf.data());
     summary_info.offset = wrt_off;
 
     // write prof_info for summary, which is always index 0
@@ -544,7 +514,6 @@ void SparseDB::write() {
     }
 
     // footer to show completeness
-    // auto pmfi = pmf->open(true, false);
     auto footer_val = PROFDBft;
     uint64_t footer_off = accFpos.fetch_add(sizeof(footer_val));
     pmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
@@ -676,27 +645,6 @@ void SparseDB::workIdTuplesSection() {
 //
 // write profiles
 //
-std::vector<char> SparseDB::profBytes(hpcrun_fmt_sparse_metrics_t* sm) {
-  std::vector<char> out;
-  std::vector<char> b;
-
-  for (uint i = 0; i < sm->num_vals; ++i) {
-    b = convertToByte8(sm->values[i].bits);
-    out.insert(out.end(), b.begin(), b.end());
-    b = convertToByte2(sm->mids[i]);
-    out.insert(out.end(), b.begin(), b.end());
-  }
-
-  for (uint i = 0; i < sm->num_nz_cct_nodes + 1; ++i) {
-    b = convertToByte4(sm->cct_node_ids[i]);
-    out.insert(out.end(), b.begin(), b.end());
-    b = convertToByte8(sm->cct_node_idxs[i]);
-    out.insert(out.end(), b.begin(), b.end());
-  }
-
-  return out;
-}
-
 void SparseDB::flushOutBuffer(uint64_t wrt_off, OutBuffer& ob) {
   auto pmfi = pmf->open(true, true);
   pmfi.writeat(wrt_off, ob.buf.size(), ob.buf.data());
@@ -707,7 +655,9 @@ void SparseDB::flushOutBuffer(uint64_t wrt_off, OutBuffer& ob) {
   ob.buffered_pis.clear();
 }
 
-uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, pms_profile_info_t& prof_info) {
+uint64_t SparseDB::writeProf(
+    const std::vector<char>& mvPairs, const std::vector<char>& ciPairs,
+    pms_profile_info_t& prof_info) {
   uint64_t wrt_off = 0;
 
   std::unique_lock<std::mutex> olck(outputs_l);
@@ -716,24 +666,25 @@ uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, pms_profile_in
   std::unique_lock<std::mutex> lck(ob.mtx);
 
   bool flush = false;
-  if ((prof_bytes.size() + ob.cur_pos) >= (64 * 1024 * 1024)) {
+  if ((mvPairs.size() + ciPairs.size() + ob.cur_pos) >= (64 * 1024 * 1024)) {
     cur_obuf_idx = 1 - cur_obuf_idx;
     flush = true;
 
-    size_t my_size = ob.buf.size() + prof_bytes.size();
+    size_t my_size = ob.buf.size() + mvPairs.size() + ciPairs.size();
     wrt_off = accFpos.fetch_add(my_size);
   }
   olck.unlock();
 
   // add bytes to the current buffer
-  ob.buf.insert(ob.buf.end(), prof_bytes.begin(), prof_bytes.end());
+  ob.buf.insert(ob.buf.end(), mvPairs.begin(), mvPairs.end());
+  ob.buf.insert(ob.buf.end(), ciPairs.begin(), ciPairs.end());
 
   // record the prof_info reference of the profile being added to the buffer
   ob.buffered_pis.emplace_back(prof_info);
 
   // update current position
   uint64_t rel_off = ob.cur_pos;
-  ob.cur_pos += prof_bytes.size();
+  ob.cur_pos += mvPairs.size() + ciPairs.size();
 
   if (flush)
     flushOutBuffer(wrt_off, ob);
