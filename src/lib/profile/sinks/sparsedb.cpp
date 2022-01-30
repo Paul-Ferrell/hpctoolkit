@@ -215,7 +215,7 @@ void SparseDB::notifyPipeline() noexcept {
   src.registerOrderedWavefront();
   src.registerOrderedWrite();
   auto& ss = src.structs();
-  ud.context = ss.context.add<udContext>(std::ref(*this));
+  ud = ss.context.add_default<udContext>();
 }
 
 void SparseDB::notifyWavefront(DataClass d) noexcept {
@@ -224,40 +224,54 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   auto mpiSem = src.enterOrderedWavefront();
   auto sig = contextWavefront.signal();
 
-  std::map<unsigned int, std::reference_wrapper<const Context>> cs;
-  src.contexts().citerate(
-      [&](const Context& c) {
-        auto id = c.userdata[src.identifier()];
-        auto x = cs.emplace(id, c);
-        assert(x.second && "Context identifiers not unique!");
-      },
-      nullptr);
+  // Fill contexts with the sorted list of Contexts
+  assert(contexts.empty());
+  src.contexts().citerate([&](const Context& c) { contexts.push_back(c); }, nullptr);
+  std::sort(contexts.begin(), contexts.end(), [this](const Context& a, const Context& b) -> bool {
+    return a.userdata[src.identifier()] < b.userdata[src.identifier()];
+  });
+  assert(
+      std::adjacent_find(
+          contexts.begin(), contexts.end(),
+          [this](const Context& a, const Context& b) -> bool {
+            return a.userdata[src.identifier()] == b.userdata[src.identifier()];
+          })
+      == contexts.end());
 
-  contexts.reserve(cs.size());
-  for (const auto& ic : cs)
-    contexts.emplace_back(ic.second);
-
-  ctxcnt = contexts.size();
-
-  // initialize profile.db
+  // Pop open profile.db and synchronize across the ranks.
   pmf = util::File(dir / "profile.db", true);
   pmf->synchronize();
 
-  // hdr + id_tuples section
-  int my_num_prof = src.threads().size();
+  // Count the total number of profiles across all ranks
+  size_t myNProf = src.threads().size();
   if (mpi::World::rank() == 0)
-    my_num_prof++;
-  uint32_t total_num_prof = mpi::allreduce(my_num_prof, mpi::Op::sum());
+    myNProf++;  // Counting the summary profile
+  auto nProf = mpi::allreduce(myNProf, mpi::Op::sum());
+
+  // Lay out some bits of the profile.db
   prof_info_sec_ptr = PMS_hdr_SIZE;
-  prof_info_sec_size = total_num_prof * PMS_prof_info_SIZE;
+  prof_info_sec_size = nProf * PMS_prof_info_SIZE;
   id_tuples_sec_ptr = prof_info_sec_ptr + MULTIPLE_8(prof_info_sec_size);
 
-  setMinProfInfoIdx(total_num_prof);  // set min_prof_info_idx, help later functions
-  workIdTuplesSection();              // write id_tuples, set id_tuples_sec_size for hdr
-  writePMSHdr(total_num_prof, *pmf);  // write hdr
+  // Figure out the absolute index of our first profile.
+  if (mpi::World::rank() == 0) {
+    // Rank 0 always starts at 0 since it handles the summary profile.
+    min_prof_info_idx = 0;
+  } else {
+    min_prof_info_idx = std::numeric_limits<uint32_t>::max();
+    for (const auto& t : src.threads().citerate()) {
+      min_prof_info_idx = std::min<uint32_t>(min_prof_info_idx, t->userdata[src.identifier()] + 1);
+    }
+  }
+
+  workIdTuplesSection();  // write id_tuples, set id_tuples_sec_size for hdr
+
+  // Rank 0 writes out the file header, now that everything has been laid out
+  if (mpi::World::rank() == 0)
+    writePMSHdr(nProf, *pmf);  // write hdr
 
   // prep for profiles writing
-  prof_infos.resize(my_num_prof);  // prepare for prof infos
+  prof_infos.resize(myNProf);  // prepare for prof infos
 
   obuffers = std::vector<OutBuffer>(2);  // prepare for prof data
   obuffers[0].cur_pos = 0;
@@ -376,7 +390,7 @@ void SparseDB::write() {
   writeProfInfos();
 
   // gather cct major data
-  ctxcnt = mpi::bcast(ctxcnt, 0);
+  ctxcnt = mpi::bcast(contexts.size(), 0);
   ctx_nzmids_cnts.resize(ctxcnt, 1);  // one for LastNodeEnd
   ctx_nzval_cnts.resize(ctxcnt, 0);
   for (const Context& c : contexts)
@@ -549,9 +563,6 @@ void SparseDB::write() {
 // hdr
 //
 void SparseDB::writePMSHdr(const uint32_t total_num_prof, const util::File& fh) {
-  if (mpi::World::rank() != 0)
-    return;
-
   std::vector<char> hdr;
 
   hdr.insert(
@@ -679,22 +690,6 @@ void SparseDB::workIdTuplesSection() {
   for (auto tuple : id_tuples) {
     free(tuple.ids);
     tuple.ids = NULL;
-  }
-}
-
-//
-// prof infos
-//
-void SparseDB::setMinProfInfoIdx(const int total_num_prof) {
-  // find the minimum prof_info_idx of this rank
-  min_prof_info_idx = 0;
-  if (mpi::World::rank() != 0) {
-    min_prof_info_idx = total_num_prof;
-    for (const auto& t : src.threads().iterate()) {
-      uint32_t prof_info_idx = t->userdata[src.identifier()] + 1;
-      if (prof_info_idx < min_prof_info_idx)
-        min_prof_info_idx = prof_info_idx;
-    }
   }
 }
 

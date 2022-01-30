@@ -101,9 +101,14 @@ private:
 
   hpctoolkit::stdshim::filesystem::path dir;
 
-  std::size_t ctxcnt;
-  std::vector<std::reference_wrapper<const hpctoolkit::Context>> contexts;
+  // Once that signals when the Contexts/Threads wavefront has passed
   hpctoolkit::util::Once contextWavefront;
+
+  // All the contexts we know about, sorted by identifier.
+  std::deque<std::reference_wrapper<const hpctoolkit::Context>> contexts;
+
+  // Total number of Contexts, as seen by Rank 0 (which has all the contexts)
+  std::size_t ctxcnt;
 
 //***************************************************************************
 // profile.db
@@ -133,7 +138,6 @@ private:
   std::vector<pms_profile_info_t> prof_infos;
   hpctoolkit::util::ParallelForEach<pms_profile_info_t> parForPi;
 
-  void setMinProfInfoIdx(const int total_num_prof);
   void handleItemPi(pms_profile_info_t& pi);
   void writeProfInfos();
 
@@ -156,16 +160,13 @@ private:
 
   class udContext {
   public:
-    udContext(const hpctoolkit::Context&, SparseDB&) : cnt(0){};
+    udContext() : cnt(0) {}
     ~udContext() = default;
 
     std::atomic<uint64_t> cnt;
   };
 
-  struct {
-    hpctoolkit::Context::ud_t::typed_member_t<udContext> context;
-    const auto& operator()(hpctoolkit::Context::ud_t&) const noexcept { return context; }
-  } ud;
+  hpctoolkit::Context::ud_t::typed_member_t<udContext> ud;
 
   // write profiles
   std::vector<char> profBytes(hpcrun_fmt_sparse_metrics_t* sm);
