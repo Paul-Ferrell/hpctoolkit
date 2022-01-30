@@ -129,12 +129,9 @@ private:
   void workIdTuplesSection();
 
   // prof info
-  std::vector<uint64_t> id_tuple_ptrs;
-  uint32_t min_prof_info_idx;
-  std::vector<pms_profile_info_t> prof_infos;
-  hpctoolkit::util::ParallelForEach<pms_profile_info_t> parForPi;
+  hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>> parForPi;
 
-  void handleItemPi(pms_profile_info_t& pi);
+  void handleItemPi(const pms_profile_info_t& pi);
   void writeProfInfos();
 
   // help write profiles in notifyWavefront, notifyThreadFinal, write
@@ -143,7 +140,7 @@ private:
   struct OutBuffer {
     std::vector<char> buf;
     size_t cur_pos;
-    std::vector<uint32_t> buffered_pidxs;
+    std::vector<std::reference_wrapper<pms_profile_info_t>> buffered_pis;
     std::mutex mtx;
   };
   std::vector<OutBuffer> obuffers;  // profiles in binary form waiting to be written
@@ -154,21 +151,36 @@ private:
   std::vector<uint64_t> ctx_nzval_cnts;
   std::vector<uint16_t> ctx_nzmids_cnts;
 
-  class udContext {
-  public:
-    udContext() : cnt(0) {}
-    ~udContext() = default;
-
-    std::atomic<uint64_t> cnt;
+  struct udContext {
+    std::atomic<uint64_t> cnt = 0;
   };
+  struct udThread {
+    pms_profile_info_t info = {
+        .metadata_ptr = 0,
+        .spare_one = 0,
+        .spare_two = 0,
+    };
+  };
+  struct {
+    hpctoolkit::Context::ud_t::typed_member_t<udContext> context;
+    const auto& operator()(hpctoolkit::Context::ud_t&) const noexcept { return context; }
+    hpctoolkit::Thread::ud_t::typed_member_t<udThread> thread;
+    const auto& operator()(hpctoolkit::Thread::ud_t&) const noexcept { return thread; }
+  } ud;
 
-  hpctoolkit::Context::ud_t::typed_member_t<udContext> ud;
+  // prof_info for the summary profile
+  pms_profile_info_t summary_info = {
+      .prof_info_idx = 0,
+      .metadata_ptr = 0,
+      .spare_one = 0,
+      .spare_two = 0,
+  };
 
   // write profiles
   std::vector<char> profBytes(hpcrun_fmt_sparse_metrics_t* sm);
   uint64_t filePosFetchOp(uint64_t val);
   void flushOutBuffer(uint64_t wrt_off, OutBuffer& ob);
-  uint64_t writeProf(const std::vector<char>& prof_bytes, uint32_t prof_info_idx);
+  uint64_t writeProf(const std::vector<char>& prof_bytes, pms_profile_info_t& prof_info);
 
   //***************************************************************************
   // cct.db

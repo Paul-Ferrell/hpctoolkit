@@ -249,7 +249,8 @@ void SparseDB::notifyPipeline() noexcept {
   src.registerOrderedWavefront();
   src.registerOrderedWrite();
   auto& ss = src.structs();
-  ud = ss.context.add_default<udContext>();
+  ud.context = ss.context.add_default<udContext>();
+  ud.thread = ss.thread.add_default<udThread>();
 }
 
 void SparseDB::notifyWavefront(DataClass d) noexcept {
@@ -287,17 +288,6 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   prof_info_sec_size = nProf * PMS_prof_info_SIZE;
   id_tuples_sec_ptr = prof_info_sec_ptr + MULTIPLE_8(prof_info_sec_size);
 
-  // Figure out the absolute index of our first profile.
-  if (mpi::World::rank() == 0) {
-    // Rank 0 always starts at 0 since it handles the summary profile.
-    min_prof_info_idx = 0;
-  } else {
-    min_prof_info_idx = std::numeric_limits<uint32_t>::max();
-    for (const auto& t : src.threads().citerate()) {
-      min_prof_info_idx = std::min<uint32_t>(min_prof_info_idx, t->userdata[src.identifier()] + 1);
-    }
-  }
-
   workIdTuplesSection();  // write id_tuples, set id_tuples_sec_size for hdr
 
   // Rank 0 writes out the file header, now that everything has been laid out
@@ -306,9 +296,6 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
         nProf, prof_info_sec_ptr, prof_info_sec_size, id_tuples_sec_ptr, id_tuples_sec_size);
     pmf->open(true, false).writeat(0, buf.size(), buf.data());
   }
-
-  // prep for profiles writing
-  prof_infos.resize(myNProf);  // prepare for prof infos
 
   obuffers = std::vector<OutBuffer>(2);  // prepare for prof data
   obuffers[0].cur_pos = 0;
@@ -398,17 +385,14 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
       == (values.size() * PMS_vm_pair_SIZE + coffsets.size() * PMS_ctx_pair_SIZE));
 
   // Build prof_info
-  pms_profile_info_t pi;
+  auto& pi = t.userdata[ud].info;
   pi.prof_info_idx = t.userdata[src.identifier()] + 1;
   pi.num_vals = values.size();
   pi.num_nzctxs = coffsets.size() - 1;
-  pi.id_tuple_ptr = id_tuple_ptrs[pi.prof_info_idx - min_prof_info_idx];
-  pi.metadata_ptr = 0;
-  pi.spare_one = 0;
-  pi.spare_two = 0;
 
-  pi.offset = writeProf(sparse_metrics_bytes, pi.prof_info_idx);
-  prof_infos[pi.prof_info_idx - min_prof_info_idx] = std::move(pi);
+  // writeProf may flush and update pi, so make sure we don't overwrite it
+  pi.offset = 0;
+  pi.offset += writeProf(sparse_metrics_bytes, pi);
 }
 
 void SparseDB::write() {
@@ -511,14 +495,8 @@ void SparseDB::write() {
     sm.cct_node_idxs = coffsets.data();
 
     // Build prof_info
-    pms_profile_info_t pi;
-    pi.prof_info_idx = 0;
-    pi.num_vals = values.size();
-    pi.num_nzctxs = coffsets.size() - 1;
-    pi.id_tuple_ptr = id_tuple_ptrs[0];
-    pi.metadata_ptr = 0;
-    pi.spare_one = 0;
-    pi.spare_two = 0;
+    summary_info.num_vals = values.size();
+    summary_info.num_nzctxs = coffsets.size() - 1;
 
     auto sparse_metrics_bytes = profBytes(&sm);
     assert(
@@ -529,10 +507,10 @@ void SparseDB::write() {
     wrt_off = accFpos.fetch_add(sparse_metrics_bytes.size());
     auto pmfi = pmf->open(true, true);
     pmfi.writeat(wrt_off, sparse_metrics_bytes.size(), sparse_metrics_bytes.data());
-    pi.offset = wrt_off;
+    summary_info.offset = wrt_off;
 
     // write prof_info for summary
-    handleItemPi(pi);
+    handleItemPi(summary_info);
 
     // footer to show completeness
     // auto pmfi = pmf->open(true, false);
@@ -600,11 +578,6 @@ void SparseDB::write() {
 // id tuples
 //
 void SparseDB::workIdTuplesSection() {
-  int local_num_prof = src.threads().size();
-  if (mpi::World::rank() == 0)
-    local_num_prof++;
-  id_tuple_ptrs.resize(local_num_prof);
-
   std::vector<char> buf;
   if (mpi::World::rank() == 0) {
     // Rank 0 handles the summary profile('s id tuple)
@@ -623,23 +596,25 @@ void SparseDB::workIdTuplesSection() {
     buf.resize(oldsz + sizeofIdTuple(idt), 0);
     insertIdTuple(&buf[oldsz], idt);
 
-    // Save the local offset in the pointers
-    id_tuple_ptrs[0] = oldsz;
+    // Save the local offset in the pointer field
+    summary_info.id_tuple_ptr = oldsz;
   }
 
   // Threads within each block are sorted by identifier. TODO: Remove this
-  std::vector<util::optional_ref<const Thread>> threads(src.threads().size());
-  for (const auto& t : src.threads().citerate()) {
-    threads[t->userdata[src.identifier()] - min_prof_info_idx] = *t;
-  }
-  for (const auto& t : threads) {
-    // Local index of this Thread
-    uint32_t idx = t->userdata[src.identifier()] + 1 - min_prof_info_idx;
+  std::vector<std::reference_wrapper<const Thread>> threads;
+  threads.reserve(src.threads().size());
+  for (const auto& t : src.threads().citerate())
+    threads.push_back(*t);
+  std::sort(threads.begin(), threads.end(), [&](const Thread& a, const Thread& b) {
+    return a.userdata[src.identifier()] < b.userdata[src.identifier()];
+  });
 
+  // Construct id tuples for each Thread in turn
+  for (const Thread& t : threads) {
     // Id tuple for t
     id_tuple_t idt = {
-        .length = (uint16_t)t->attributes.idTuple().size(),
-        .ids = const_cast<pms_id_t*>(t->attributes.idTuple().data()),
+        .length = (uint16_t)t.attributes.idTuple().size(),
+        .ids = const_cast<pms_id_t*>(t.attributes.idTuple().data()),
     };
 
     // Append to the end of the blob
@@ -648,13 +623,15 @@ void SparseDB::workIdTuplesSection() {
     insertIdTuple(&buf[oldsz], idt);
 
     // Save the local offset in the pointers
-    id_tuple_ptrs[idx] = oldsz;
+    t.userdata[ud].info.id_tuple_ptr = oldsz;
   }
 
   // Determine the offset of our blob, update the pointers and write it out.
   uint64_t offset = mpi::exscan<uint64_t>(buf.size(), mpi::Op::sum()).value_or(0);
-  for (auto& ptr : id_tuple_ptrs)
-    ptr += id_tuples_sec_ptr + offset;
+  summary_info.id_tuple_ptr += id_tuples_sec_ptr + offset;
+  for (const auto& t : src.threads().citerate()) {
+    t->userdata[ud].info.id_tuple_ptr += id_tuples_sec_ptr + offset;
+  }
   {
     auto fhi = pmf->open(true, false);
     fhi.writeat(id_tuples_sec_ptr + offset, buf.size(), buf.data());
@@ -665,7 +642,7 @@ void SparseDB::workIdTuplesSection() {
   id_tuples_sec_size = mpi::reduce(buf.size(), 0, mpi::Op::sum());
 }
 
-void SparseDB::handleItemPi(pms_profile_info_t& pi) {
+void SparseDB::handleItemPi(const pms_profile_info_t& pi) {
   std::vector<char> info_bytes;
 
   auto b = convertToByte8(pi.id_tuple_ptr);
@@ -696,7 +673,12 @@ void SparseDB::handleItemPi(pms_profile_info_t& pi) {
 }
 
 void SparseDB::writeProfInfos() {
-  parForPi.fill(std::move(prof_infos), [&](pms_profile_info_t& item) { handleItemPi(item); });
+  std::vector<std::reference_wrapper<const pms_profile_info_t>> prof_infos;
+  prof_infos.reserve(src.threads().size());
+  for (const auto& t : src.threads().citerate())
+    prof_infos.push_back(t->userdata[ud].info);
+
+  parForPi.fill(std::move(prof_infos), [&](const pms_profile_info_t& item) { handleItemPi(item); });
   parForPi.contribute(parForPi.wait());
 }
 
@@ -727,14 +709,14 @@ std::vector<char> SparseDB::profBytes(hpcrun_fmt_sparse_metrics_t* sm) {
 void SparseDB::flushOutBuffer(uint64_t wrt_off, OutBuffer& ob) {
   auto pmfi = pmf->open(true, true);
   pmfi.writeat(wrt_off, ob.buf.size(), ob.buf.data());
-  for (auto pi : ob.buffered_pidxs)
-    prof_infos[pi - min_prof_info_idx].offset += wrt_off;
+  for (pms_profile_info_t& pi : ob.buffered_pis)
+    pi.offset += wrt_off;
   ob.cur_pos = 0;
   ob.buf.clear();
-  ob.buffered_pidxs.clear();
+  ob.buffered_pis.clear();
 }
 
-uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, uint32_t prof_info_idx) {
+uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, pms_profile_info_t& prof_info) {
   uint64_t wrt_off = 0;
 
   std::unique_lock<std::mutex> olck(outputs_l);
@@ -755,8 +737,8 @@ uint64_t SparseDB::writeProf(const std::vector<char>& prof_bytes, uint32_t prof_
   // add bytes to the current buffer
   ob.buf.insert(ob.buf.end(), prof_bytes.begin(), prof_bytes.end());
 
-  // record the prof_info_idx of the profile being added to the buffer
-  ob.buffered_pidxs.emplace_back(prof_info_idx);
+  // record the prof_info reference of the profile being added to the buffer
+  ob.buffered_pis.emplace_back(prof_info);
 
   // update current position
   uint64_t rel_off = ob.cur_pos;
