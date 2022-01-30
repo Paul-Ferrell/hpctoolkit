@@ -192,16 +192,6 @@ static char* insertIdTuple(char* cur, const id_tuple_t& tuple) {
   return cur;
 }
 
-static std::vector<char> composeIdTuples(const std::vector<id_tuple_t>& tuples) {
-  std::vector<char> buf;
-  for (const auto& tuple : tuples) {
-    auto oldsz = buf.size();
-    buf.resize(oldsz + sizeofIdTuple(tuple), 0);
-    insertIdTuple(&buf[oldsz], tuple);
-  }
-  return buf;
-}
-
 static pms_profile_info_t parseProfInfo(const char* input) {
   pms_profile_info_t pi;
   pi.id_tuple_ptr = interpretByte8(input);
@@ -613,67 +603,66 @@ void SparseDB::workIdTuplesSection() {
   int local_num_prof = src.threads().size();
   if (mpi::World::rank() == 0)
     local_num_prof++;
-
-  std::vector<id_tuple_t> id_tuples(local_num_prof);
   id_tuple_ptrs.resize(local_num_prof);
-  uint64_t local_tuples_size = 0;
 
-  // fill the id_tuples and id_tuple_ptrs
-  for (const auto& t : src.threads().iterate()) {
-    // get the idx in the id_tuples and id_tuple_ptrs
+  std::vector<char> buf;
+  if (mpi::World::rank() == 0) {
+    // Rank 0 handles the summary profile('s id tuple)
+    pms_id_t sumId = {
+        .kind = IDTUPLE_SUMMARY,
+        .physical_index = IDTUPLE_SUMMARY_IDX,
+        .logical_index = IDTUPLE_SUMMARY_IDX,
+    };
+    id_tuple_t idt = {
+        .length = IDTUPLE_SUMMARY_LENGTH,
+        .ids = &sumId,
+    };
+
+    // Append to the end of the blob
+    auto oldsz = buf.size();
+    buf.resize(oldsz + sizeofIdTuple(idt), 0);
+    insertIdTuple(&buf[oldsz], idt);
+
+    // Save the local offset in the pointers
+    id_tuple_ptrs[0] = oldsz;
+  }
+
+  // Threads within each block are sorted by identifier. TODO: Remove this
+  std::vector<util::optional_ref<const Thread>> threads(src.threads().size());
+  for (const auto& t : src.threads().citerate()) {
+    threads[t->userdata[src.identifier()] - min_prof_info_idx] = *t;
+  }
+  for (const auto& t : threads) {
+    // Local index of this Thread
     uint32_t idx = t->userdata[src.identifier()] + 1 - min_prof_info_idx;
 
-    // build the id_tuple
-    id_tuple_t idt;
-    idt.length = t->attributes.idTuple().size();
-    idt.ids = (pms_id_t*)malloc(idt.length * sizeof(pms_id_t));
-    for (uint i = 0; i < idt.length; i++)
-      idt.ids[i] = t->attributes.idTuple()[i];
+    // Id tuple for t
+    id_tuple_t idt = {
+        .length = (uint16_t)t->attributes.idTuple().size(),
+        .ids = const_cast<pms_id_t*>(t->attributes.idTuple().data()),
+    };
 
-    id_tuples[idx] = std::move(idt);
-    id_tuple_ptrs[idx] = PMS_id_tuple_len_SIZE + idt.length * PMS_id_SIZE;
-    local_tuples_size += id_tuple_ptrs[idx];
+    // Append to the end of the blob
+    auto oldsz = buf.size();
+    buf.resize(oldsz + sizeofIdTuple(idt), 0);
+    insertIdTuple(&buf[oldsz], idt);
+
+    // Save the local offset in the pointers
+    id_tuple_ptrs[idx] = oldsz;
   }
 
-  // don't forget the summary id_tuple
-  if (mpi::World::rank() == 0) {
-    id_tuple_t idt;
-    idt.length = IDTUPLE_SUMMARY_LENGTH;
-    idt.ids = (pms_id_t*)malloc(idt.length * sizeof(pms_id_t));
-    idt.ids[0].kind = IDTUPLE_SUMMARY;
-    idt.ids[0].physical_index = IDTUPLE_SUMMARY_IDX;
-    idt.ids[0].logical_index = IDTUPLE_SUMMARY_IDX;
-
-    id_tuples[0] = std::move(idt);
-    id_tuple_ptrs[0] = PMS_id_tuple_len_SIZE + idt.length * PMS_id_SIZE;
-    local_tuples_size += id_tuple_ptrs[0];
-  }
-
-  // find where to write as a rank
-  uint64_t my_offset = 0;
-  my_offset = mpi::exscan(local_tuples_size, mpi::Op::sum()).value_or(0);
-
-  // write out id_tuples
+  // Determine the offset of our blob, update the pointers and write it out.
+  uint64_t offset = mpi::exscan<uint64_t>(buf.size(), mpi::Op::sum()).value_or(0);
+  for (auto& ptr : id_tuple_ptrs)
+    ptr += id_tuples_sec_ptr + offset;
   {
-    auto buf = composeIdTuples(id_tuples);
     auto fhi = pmf->open(true, false);
-    fhi.writeat(id_tuples_sec_ptr + my_offset, buf.size(), buf.data());
+    fhi.writeat(id_tuples_sec_ptr + offset, buf.size(), buf.data());
   }
 
-  // set class variable, will be output in hdr
-  id_tuples_sec_size = mpi::allreduce(local_tuples_size, mpi::Op::sum());
-
-  // id_tuple_ptrs now store the number of bytes for each idtuple, exscan to get ptr
-  std::exclusive_scan(id_tuple_ptrs.begin(), id_tuple_ptrs.end(), id_tuple_ptrs.begin(), 0);
-  for (auto& ptr : id_tuple_ptrs) {
-    ptr += (my_offset + id_tuples_sec_ptr);
-  }
-
-  // free all the tuples
-  for (auto tuple : id_tuples) {
-    free(tuple.ids);
-    tuple.ids = NULL;
-  }
+  // Set the section size based on the sizes everyone contributes
+  // Rank 0 handles the file header, so only Rank 0 needs to know
+  id_tuples_sec_size = mpi::reduce(buf.size(), 0, mpi::Op::sum());
 }
 
 void SparseDB::handleItemPi(pms_profile_info_t& pi) {
