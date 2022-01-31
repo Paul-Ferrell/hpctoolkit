@@ -277,11 +277,14 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   std::sort(contexts.begin(), contexts.end(), [this](const Context& a, const Context& b) -> bool {
     return a.userdata[src.identifier()] < b.userdata[src.identifier()];
   });
+
+  // The code in this Sink depends on dense Context identifiers
+  // TODO: Review this dependency and remove whenever possible
   assert(
       std::adjacent_find(
           contexts.begin(), contexts.end(),
           [this](const Context& a, const Context& b) -> bool {
-            return a.userdata[src.identifier()] == b.userdata[src.identifier()];
+            return a.userdata[src.identifier()] + 1 != b.userdata[src.identifier()];
           })
       == contexts.end());
 
@@ -469,7 +472,6 @@ void SparseDB::write() {
 
   // gather cct major data
   ctxcnt = mpi::bcast(contexts.size(), 0);
-  ctx_nzmids_cnts.resize(ctxcnt, 1);  // one for LastNodeEnd
 
   // Rank 0 writes out the summary profile, but we fuse a few loops here
   std::vector<char> mvPairsBuf;
@@ -523,10 +525,7 @@ void SparseDB::write() {
             }
           }
         }
-        if (hasEx)
-          ctx_nzmids_cnts[c.userdata[src.identifier()]]++;
-        if (hasInc)
-          ctx_nzmids_cnts[c.userdata[src.identifier()]]++;
+        c.userdata[ud].nMetrics += (hasEx ? 1 : 0) + (hasInc ? 1 : 0);
       }
     }
 
@@ -729,11 +728,12 @@ void SparseDB::cctdbSetUp() {
   ctxOffsets = std::vector<uint64_t>(ctxcnt + 1, 0);
   for (const Context& c : contexts) {
     const auto i = c.userdata[src.identifier()];
-    ctxOffsets[i] =
-        c.userdata[ud].nValues.load(std::memory_order_relaxed) * CMS_val_prof_idx_pair_SIZE;
+    assert(&c == &contexts[i].get());
+    const auto& udc = c.userdata[ud];
+    ctxOffsets[i] = udc.nValues.load(std::memory_order_relaxed) * CMS_val_prof_idx_pair_SIZE;
     // ????
-    if (mpi::World::rank() == 0 && ctx_nzmids_cnts[i] > 1)
-      ctxOffsets[i] += ctx_nzmids_cnts[i] * CMS_m_pair_SIZE;
+    if (mpi::World::rank() == 0 && c.userdata[ud].nMetrics > 0)
+      ctxOffsets[i] += (c.userdata[ud].nMetrics + 1) * CMS_m_pair_SIZE;
   }
   std::exclusive_scan(
       ctxOffsets.begin(), ctxOffsets.end(), ctxOffsets.begin(),
@@ -965,7 +965,7 @@ void SparseDB::writeCCTDB() {
     std::vector<char> buf(ctxcnt * CMS_ctx_info_SIZE);
     char* cur = buf.data();
     for (uint32_t i = 0; i < ctxcnt; i++) {
-      uint16_t nMetrics = ctx_nzmids_cnts[i] - 1;
+      uint16_t nMetrics = contexts[i].get().userdata[ud].nMetrics;
       uint64_t nVals = nMetrics == 0
                          ? 0
                          : (ctxOffsets[i + 1] - ctxOffsets[i] - (nMetrics + 1) * CMS_m_pair_SIZE)

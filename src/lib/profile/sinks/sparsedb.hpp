@@ -187,11 +187,9 @@ private:
     std::array<Buffer, 2> bufs;
   } profDataOut;
 
-  // help collect cct major data
-  std::vector<uint16_t> ctx_nzmids_cnts;
-
   struct udContext {
     std::atomic<uint64_t> nValues = 0;
+    uint16_t nMetrics = 0;
   };
   struct udThread {
     pms_profile_info_t info = {
