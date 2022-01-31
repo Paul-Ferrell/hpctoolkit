@@ -124,18 +124,67 @@ private:
   // prof info
   hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>> parForPi;
 
-  // help write profiles in notifyWavefront, notifyThreadFinal, write
-  hpctoolkit::mpi::SharedAccumulator accFpos;
+  // Double-buffered concurrent output for profile data, synchronized across
+  // multiple MPI ranks.
+  class DoubleBufferedOutput {
+  public:
+    DoubleBufferedOutput();
+    ~DoubleBufferedOutput() = default;
 
-  struct OutBuffer {
-    std::vector<char> buf;
-    size_t cur_pos;
-    std::vector<std::reference_wrapper<pms_profile_info_t>> buffered_pis;
-    std::mutex mtx;
-  };
-  std::vector<OutBuffer> obuffers;  // profiles in binary form waiting to be written
-  int cur_obuf_idx;
-  std::mutex outputs_l;
+    DoubleBufferedOutput(DoubleBufferedOutput&&) = delete;
+    DoubleBufferedOutput(const DoubleBufferedOutput&) = delete;
+    DoubleBufferedOutput& operator=(DoubleBufferedOutput&&) = delete;
+    DoubleBufferedOutput& operator=(const DoubleBufferedOutput&) = delete;
+
+    // Set the output File and the offset data written this way should start at
+    // MT: Externally Synchronized
+    void initialize(util::File& outfile, uint64_t startOffset);
+
+    // Allocate some space in the file for the given number of bytes, and return
+    // the final offset for this space.
+    // MT: Internally Synchronized
+    uint64_t allocate(uint64_t size);
+
+    // Write a new blob of profile data into the buffer, obtained by
+    // concatinating the two given blobs. The final offset of the blob will be
+    // saved to `offset` after flush() has been called.
+    // MT: Internally Synchronized
+    void write(const std::vector<char>& mvBlob, const std::vector<char>& ciBlob, uint64_t& offset);
+
+    // Flush the buffers and write everything out to the file.
+    // MT: Internally Synchronized
+    void flush();
+
+  private:
+    // Counter for offsets within the file itself
+    mpi::SharedAccumulator pos;
+    // File everything gets written to in the end
+    util::optional_ref<util::File> file;
+
+    // Lock for the top-level internal state
+    std::mutex toplock;
+    // Index of the current Buffer to write new data to
+    int currentBuf = 0;
+
+    struct Buffer {
+      static constexpr size_t bufferSize = 64 * 1024 * 1024;  // 64MiB
+      Buffer() { blob.reserve(bufferSize); }
+
+      // Lock for per-Buffer state
+      std::mutex lowlock;
+      // Blob of buffered data to write out on flush
+      std::vector<char> blob;
+      // Offsets to update once this Buffer is flushed
+      std::vector<std::reference_wrapper<uint64_t>> toUpdate;
+
+      // Flush this Buffer's data to the given File.
+      // MT: Externally Synchronized (holding lowlock)
+      void flush(util::File& file, uint64_t offset);
+    };
+
+    // Buffers to rotate between for parallelism
+    std::array<Buffer, 2> bufs;
+  } profDataOut;
 
   // help collect cct major data
   std::vector<uint16_t> ctx_nzmids_cnts;
@@ -164,12 +213,6 @@ private:
       .spare_one = 0,
       .spare_two = 0,
   };
-
-  // write profiles
-  void flushOutBuffer(uint64_t wrt_off, OutBuffer& ob);
-  uint64_t writeProf(
-      const std::vector<char>& mvPairs, const std::vector<char>& ciPairs,
-      pms_profile_info_t& prof_info);
 
   //***************************************************************************
   // cct.db

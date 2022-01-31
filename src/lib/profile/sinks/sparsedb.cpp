@@ -240,7 +240,7 @@ static char* insertCtxInfo(char* cur, cms_ctx_info_t ci) {
 }
 
 SparseDB::SparseDB(stdshim::filesystem::path p)
-    : dir(std::move(p)), accFpos(mpi::Tag::SparseDB_1), groupCounter(mpi::Tag::SparseDB_2) {
+    : dir(std::move(p)), groupCounter(mpi::Tag::SparseDB_2) {
   if (dir.empty())
     util::log::fatal{} << "SparseDB doesn't allow for dry runs!";
   else
@@ -369,14 +369,8 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
     pmf->open(true, false).writeat(0, buf.size(), buf.data());
   }
 
-  // Initialize the double-buffered output scheme for profile data
-  obuffers = std::vector<OutBuffer>(2);  // prepare for prof data
-  obuffers[0].cur_pos = 0;
-  obuffers[1].cur_pos = 0;
-  cur_obuf_idx = 0;
-  accFpos.initialize(
-      idTuplesPtr
-      + MULTIPLE_8(idTuplesSize));  // start the window to keep track of the real file cursor
+  // Set up the double-buffered output for profile data
+  profDataOut.initialize(*pmf, idTuplesPtr + MULTIPLE_8(idTuplesSize));
 }
 
 void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
@@ -449,22 +443,14 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
   pi.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
   pi.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
 
-  // writeProf may flush and update pi, so make sure we don't overwrite it
-  pi.offset = 0;
-  pi.offset += writeProf(mvPairsBuf, ciPairsBuf, pi);
+  profDataOut.write(mvPairsBuf, ciPairsBuf, pi.offset);
 }
 
 void SparseDB::write() {
   auto mpiSem = src.enterOrderedWrite();
 
-  // flush out the remaining buffer besides summary
-  OutBuffer& ob = obuffers[cur_obuf_idx];
-  uint64_t wrt_off = 0;
-
-  if (ob.buf.size() != 0) {
-    wrt_off = accFpos.fetch_add(ob.buf.size());
-    flushOutBuffer(wrt_off, ob);
-  }
+  // Make sure all the profile data is on disk
+  profDataOut.flush();
 
   // write prof_infos, no summary yet
   {
@@ -554,23 +540,20 @@ void SparseDB::write() {
     summary_info.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
     summary_info.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
 
-    // write summary data into the current buffer
-    wrt_off = accFpos.fetch_add(mvPairsBuf.size() + ciPairsBuf.size());
-    auto pmfi = pmf->open(true, true);
-    pmfi.writeat(wrt_off, mvPairsBuf.size(), mvPairsBuf.data());
-    pmfi.writeat(wrt_off + mvPairsBuf.size(), ciPairsBuf.size(), ciPairsBuf.data());
-    summary_info.offset = wrt_off;
+    // Write the summary profile out and make sure it makes it to disk
+    profDataOut.write(std::move(mvPairsBuf), std::move(ciPairsBuf), summary_info.offset);
+    profDataOut.flush();
 
     // write prof_info for summary, which is always index 0
+    auto pmfi = pmf->open(true, false);
     {
       auto buf = composeProfInfo(summary_info);
-      auto fhi = pmf->open(true, false);
-      fhi.writeat(profInfosPtr, buf.size(), buf.data());
+      pmfi.writeat(profInfosPtr, buf.size(), buf.data());
     }
 
     // footer to show completeness
     auto footer_val = PROFDBft;
-    uint64_t footer_off = accFpos.fetch_add(sizeof(footer_val));
+    uint64_t footer_off = profDataOut.allocate(sizeof(footer_val));
     pmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
   } else {
     // prepare for cct.db, initiate some worker threads
@@ -629,54 +612,63 @@ void SparseDB::write() {
 /// PROFILEDB FOOTER CORRECT, FILE COMPLETE
 //***************************************************************************
 
-//
-// write profiles
-//
-void SparseDB::flushOutBuffer(uint64_t wrt_off, OutBuffer& ob) {
-  auto pmfi = pmf->open(true, true);
-  pmfi.writeat(wrt_off, ob.buf.size(), ob.buf.data());
-  for (pms_profile_info_t& pi : ob.buffered_pis)
-    pi.offset += wrt_off;
-  ob.cur_pos = 0;
-  ob.buf.clear();
-  ob.buffered_pis.clear();
+SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
+
+void SparseDB::DoubleBufferedOutput::initialize(util::File& outfile, uint64_t startOffset) {
+  file = outfile;
+  pos.initialize(startOffset);
 }
 
-uint64_t SparseDB::writeProf(
-    const std::vector<char>& mvPairs, const std::vector<char>& ciPairs,
-    pms_profile_info_t& prof_info) {
-  uint64_t wrt_off = 0;
+uint64_t SparseDB::DoubleBufferedOutput::allocate(uint64_t size) {
+  return pos.fetch_add(size);
+}
 
-  std::unique_lock<std::mutex> olck(outputs_l);
-  OutBuffer& ob = obuffers[cur_obuf_idx];
+void SparseDB::DoubleBufferedOutput::write(
+    const std::vector<char>& mvBlob, const std::vector<char>& ciBlob, uint64_t& offset) {
+  assert(file);
 
-  std::unique_lock<std::mutex> lck(ob.mtx);
+  // Lock up the top-level state and inner Buffer
+  std::unique_lock<std::mutex> topl(toplock);
+  Buffer& buf = bufs[currentBuf];
+  std::unique_lock<std::mutex> lowl(buf.lowlock);
 
-  bool flush = false;
-  if ((mvPairs.size() + ciPairs.size() + ob.cur_pos) >= (64 * 1024 * 1024)) {
-    cur_obuf_idx = 1 - cur_obuf_idx;
-    flush = true;
+  // If the Buffer will be full after our addition, we'll have to flush it
+  // afterwards. Let other threads progress in this case by rotating buffers.
+  bool needsFlush = buf.blob.size() + mvBlob.size() + ciBlob.size() >= Buffer::bufferSize;
+  if (needsFlush)
+    currentBuf = (currentBuf + 1) % bufs.size();
+  topl.unlock();  // Let other threads progress in the other Buffer now
 
-    size_t my_size = ob.buf.size() + mvPairs.size() + ciPairs.size();
-    wrt_off = accFpos.fetch_add(my_size);
+  // Record the relative offset and append our new bytes to our Buffer
+  offset = buf.blob.size();
+  buf.toUpdate.push_back(offset);
+  buf.blob.insert(buf.blob.end(), mvBlob.begin(), mvBlob.end());
+  buf.blob.insert(buf.blob.end(), ciBlob.begin(), ciBlob.end());
+
+  if (needsFlush)
+    buf.flush(*file, allocate(buf.blob.size()));
+}
+
+void SparseDB::DoubleBufferedOutput::Buffer::flush(util::File& file, uint64_t offset) {
+  if (!blob.empty())
+    file.open(true, true).writeat(offset, blob.size(), blob.data());
+
+  // Update the saved offsets with the final answers
+  for (uint64_t& target : toUpdate)
+    target += offset;
+
+  // Reset this Buffer for the next time around
+  blob.clear();
+  blob.reserve(bufferSize);
+  toUpdate.clear();
+}
+
+void SparseDB::DoubleBufferedOutput::flush() {
+  assert(file);
+  for (Buffer& buf : bufs) {
+    std::unique_lock<std::mutex> l(buf.lowlock);
+    buf.flush(*file, allocate(buf.blob.size()));
   }
-  olck.unlock();
-
-  // add bytes to the current buffer
-  ob.buf.insert(ob.buf.end(), mvPairs.begin(), mvPairs.end());
-  ob.buf.insert(ob.buf.end(), ciPairs.begin(), ciPairs.end());
-
-  // record the prof_info reference of the profile being added to the buffer
-  ob.buffered_pis.emplace_back(prof_info);
-
-  // update current position
-  uint64_t rel_off = ob.cur_pos;
-  ob.cur_pos += mvPairs.size() + ciPairs.size();
-
-  if (flush)
-    flushOutBuffer(wrt_off, ob);
-
-  return rel_off + wrt_off;
 }
 
 //***************************************************************************
