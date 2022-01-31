@@ -248,7 +248,7 @@ SparseDB::SparseDB(stdshim::filesystem::path p)
 }
 
 util::WorkshareResult SparseDB::help() {
-  auto res = parForPi.contribute();
+  auto res = forEachProfileInfo.contribute();
   if (!res.completed)
     return res;
   res = forProfilesParse.contribute();
@@ -449,32 +449,33 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
 void SparseDB::write() {
   auto mpiSem = src.enterOrderedWrite();
 
-  // Make sure all the profile data is on disk
+  // Make sure all the profile data is on disk and all offsets are updated
   profDataOut.flush();
 
-  // write prof_infos, no summary yet
+  // Now that the profile infos are up-to-date, write them all in parallel
   {
     std::vector<std::reference_wrapper<const pms_profile_info_t>> prof_infos;
     prof_infos.reserve(src.threads().size());
     for (const auto& t : src.threads().citerate())
       prof_infos.push_back(t->userdata[ud].info);
 
-    parForPi.fill(std::move(prof_infos), [&](const pms_profile_info_t& pi) {
+    forEachProfileInfo.fill(std::move(prof_infos), [&](const pms_profile_info_t& pi) {
       auto buf = composeProfInfo(pi);
       auto fhi = pmf->open(true, false);
       fhi.writeat(profInfosPtr + pi.prof_info_idx * PMS_prof_info_SIZE, buf.size(), buf.data());
     });
-    parForPi.contribute(parForPi.wait());
+    forEachProfileInfo.contribute(forEachProfileInfo.wait());
   }
 
   // gather cct major data
   ctxcnt = mpi::bcast(contexts.size(), 0);
   ctx_nzmids_cnts.resize(ctxcnt, 1);  // one for LastNodeEnd
 
+  // Rank 0 writes out the summary profile, but we fuse a few loops here
+  std::vector<char> mvPairsBuf;
+  std::vector<char> ciPairsBuf;
   if (mpi::World::rank() == 0) {
     // Allocate the blobs needed for the final output
-    std::vector<char> mvPairsBuf;
-    std::vector<char> ciPairsBuf;
     ciPairsBuf.reserve((contexts.size() + 1) * PMS_ctx_pair_SIZE);
 
     // Helper functions to insert ctx_id/idx pairs and metric/value pairs
@@ -529,13 +530,16 @@ void SparseDB::write() {
       }
     }
 
-    // prepare for cct.db, initiate some worker threads
-    cctdbSetUp();
-
-    // SUMMARY
     // Add the extra ctx id and offset pair, to mark the end of ctx
     addCiPair(LastNodeEnd, mvPairsBuf.size() / PMS_vm_pair_SIZE);
+  }
 
+  // Now the data is ready for the initial cct.db distribution bits, so start
+  // that off as early as we can.
+  cctdbSetUp();
+
+  // Back to rank 0 for writing out the summary profile
+  if (mpi::World::rank() == 0) {
     // Build prof_info
     summary_info.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
     summary_info.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
@@ -544,20 +548,15 @@ void SparseDB::write() {
     profDataOut.write(std::move(mvPairsBuf), std::move(ciPairsBuf), summary_info.offset);
     profDataOut.flush();
 
-    // write prof_info for summary, which is always index 0
+    // Write the summary info, which is always profile index 0
     auto pmfi = pmf->open(true, false);
-    {
-      auto buf = composeProfInfo(summary_info);
-      pmfi.writeat(profInfosPtr, buf.size(), buf.data());
-    }
+    auto buf = composeProfInfo(summary_info);
+    pmfi.writeat(profInfosPtr, buf.size(), buf.data());
 
-    // footer to show completeness
+    // Write out the footer to indicate that profile.db is complete
     auto footer_val = PROFDBft;
     uint64_t footer_off = profDataOut.allocate(sizeof(footer_val));
     pmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
-  } else {
-    // prepare for cct.db, initiate some worker threads
-    cctdbSetUp();
   }
 
   // do the actual main reads and writes of cct.db

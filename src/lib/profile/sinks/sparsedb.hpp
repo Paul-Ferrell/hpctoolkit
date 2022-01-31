@@ -122,7 +122,8 @@ private:
   static constexpr uint64_t profInfosPtr = PMS_hdr_SIZE;
 
   // prof info
-  hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>> parForPi;
+  hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>>
+      forEachProfileInfo;
 
   // Double-buffered concurrent output for profile data, synchronized across
   // multiple MPI ranks.
