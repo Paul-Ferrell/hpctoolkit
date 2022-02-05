@@ -485,11 +485,11 @@ void MetaDB::write() try {
 
     const auto compose = [this](const Context& c, std::vector<char>& out) {
       const auto& udc = c.userdata[ud];
-      fmt_metadb_context_t ctx = {
-        .szChildren = udc.szChildren, .pChildren = udc.pChildren,
-        .ctxId = c.userdata[src.identifier()],
-        .pFunction = 0, .pFile = 0, .pModule = 0,
-      };
+      fmt_metadb_context_t ctx;
+      ctx.szChildren = udc.szChildren;
+      ctx.pChildren = udc.pChildren;
+      ctx.ctxId = c.userdata[src.identifier()];
+      ctx.pFunction = ctx.pFile = ctx.pModule = 0;
       switch(c.scope().relation()) {
       case Relation::global: std::abort();
       case Relation::enclosure:
@@ -634,10 +634,9 @@ std::vector<char> MetaDB::MetricRef::composeScopes(uint64_t start,
     scopeCursor += FMT_METADB_SZ_MetricScope;
 
     for(const auto& p: m.partials()) {
-      fmt_metadb_metricSummary_t summary = {
-        .pFormula = str(accumulateFormulaString(p.accumulate())),
-        .statMetricId = static_cast<uint16_t>(id.getFor(p, ms)),
-      };
+      fmt_metadb_metricSummary_t summary;
+      summary.pFormula = str(accumulateFormulaString(p.accumulate()));
+      summary.statMetricId = static_cast<uint16_t>(id.getFor(p, ms));
       switch(p.combinator()) {
       case Statistic::combination_t::sum:
         summary.combine = FMT_METADB_COMBINE_Sum;

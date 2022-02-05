@@ -59,6 +59,7 @@
 
 //************************* System Include Files ****************************
 
+#include <functional>
 #include <iostream>
 #include <string>
 using std::string;
@@ -706,13 +707,14 @@ Analysis::Raw::writeAsText_metadb(const char* filenm)
     }
 
     { // File footer
-      char buf[sizeof fmt_metadb_footer];
-      if(fseeko(fs, -sizeof buf, SEEK_END) < 0)
+      char buf[sizeof fmt_metadb_footer + 1];
+      if(fseeko(fs, -sizeof fmt_metadb_footer, SEEK_END) < 0)
         DIAG_Throw("error seeking to meta.db footer");
-      if(fread(buf, 1, sizeof buf, fs) < sizeof buf)
+      if(fread(buf, 1, sizeof fmt_metadb_footer, fs) < sizeof fmt_metadb_footer)
         DIAG_Throw("error reading meta.db footer");
-      std::cout << "[footer: '" << std::string_view(buf, sizeof buf) << "'";
-      if(memcmp(buf, fmt_metadb_footer, sizeof buf) == 0)
+      buf[sizeof fmt_metadb_footer] = '\0';
+      std::cout << "[footer: '" << buf << "'";
+      if(memcmp(buf, fmt_metadb_footer, sizeof fmt_metadb_footer) == 0)
         std::cout << ", OK]\n";
       else
         std::cout << ", INVALID]\n";
