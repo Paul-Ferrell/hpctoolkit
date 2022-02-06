@@ -175,7 +175,6 @@ private:
   } profDataOut;
 
   // Paths and Files
-  hpctoolkit::stdshim::filesystem::path dir;
   std::optional<hpctoolkit::util::File> pmf;
   std::optional<hpctoolkit::util::File> cmf;
 
@@ -191,9 +190,6 @@ private:
       .spare_one = 0,
       .spare_two = 0,
   };
-
-  // Shared accumulator to dynamically allocate context ranges to MPI ranks
-  hpctoolkit::mpi::SharedAccumulator ctxRangeCounter;
 
   // Parallel workshares for the various parallel operations
   hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>>

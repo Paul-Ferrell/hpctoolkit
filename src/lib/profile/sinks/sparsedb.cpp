@@ -243,12 +243,18 @@ static char* insertCtxInfo(char* cur, cms_ctx_info_t ci) {
   return cur;
 }
 
-SparseDB::SparseDB(stdshim::filesystem::path p)
-    : dir(std::move(p)), ctxRangeCounter(mpi::Tag::SparseDB_2) {
+//
+// SparseDB common bits
+//
+
+SparseDB::SparseDB(stdshim::filesystem::path dir) {
   if (dir.empty())
     util::log::fatal{} << "SparseDB doesn't allow for dry runs!";
   else
     stdshim::filesystem::create_directory(dir);
+
+  pmf = util::File(dir / "profile.db", true);
+  cmf = util::File(dir / "cct.db", true);
 
   // Dump the FORMATS.md file
   try {
@@ -297,8 +303,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
           })
       == contexts.end());
 
-  // Pop open profile.db and synchronize across the ranks.
-  pmf = util::File(dir / "profile.db", true);
+  // Synchronize the profile.db across the ranks
   pmf->synchronize();
 
   // Count the total number of profiles across all ranks
@@ -458,6 +463,66 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
   profDataOut.write(mvPairsBuf, ciPairsBuf, pi.offset);
 }
 
+SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
+
+void SparseDB::DoubleBufferedOutput::initialize(util::File& outfile, uint64_t startOffset) {
+  file = outfile;
+  pos.initialize(startOffset);
+}
+
+uint64_t SparseDB::DoubleBufferedOutput::allocate(uint64_t size) {
+  return pos.fetch_add(size);
+}
+
+void SparseDB::DoubleBufferedOutput::write(
+    const std::vector<char>& mvBlob, const std::vector<char>& ciBlob, uint64_t& offset) {
+  assert(file);
+
+  // Lock up the top-level state and inner Buffer
+  std::unique_lock<std::mutex> topl(toplock);
+  Buffer& buf = bufs[currentBuf];
+  std::unique_lock<std::mutex> lowl(buf.lowlock);
+
+  // If the Buffer will be full after our addition, we'll have to flush it
+  // afterwards. Let other threads progress in this case by rotating buffers.
+  bool needsFlush = buf.blob.size() + mvBlob.size() + ciBlob.size() >= Buffer::bufferSize;
+  if (needsFlush)
+    currentBuf = (currentBuf + 1) % bufs.size();
+  topl.unlock();  // Let other threads progress in the other Buffer now
+
+  // Record the relative offset and append our new bytes to our Buffer
+  offset = buf.blob.size();
+  buf.toUpdate.push_back(offset);
+  buf.blob.insert(buf.blob.end(), mvBlob.begin(), mvBlob.end());
+  buf.blob.insert(buf.blob.end(), ciBlob.begin(), ciBlob.end());
+
+  if (needsFlush)
+    buf.flush(*file, allocate(buf.blob.size()));
+}
+
+void SparseDB::DoubleBufferedOutput::Buffer::flush(util::File& file, uint64_t offset) {
+  if (!blob.empty())
+    file.open(true, true).writeat(offset, blob.size(), blob.data());
+
+  // Update the saved offsets with the final answers
+  for (uint64_t& target : toUpdate)
+    target += offset;
+
+  // Reset this Buffer for the next time around
+  blob.clear();
+  blob.reserve(bufferSize);
+  toUpdate.clear();
+}
+
+void SparseDB::DoubleBufferedOutput::flush() {
+  assert(file);
+  for (Buffer& buf : bufs) {
+    std::unique_lock<std::mutex> l(buf.lowlock);
+    buf.flush(*file, allocate(buf.blob.size()));
+  }
+}
+
+// Read all the ctx_id/idx pairs for a profile from the profile.db
 static std::vector<std::pair<uint32_t, uint64_t>>
 readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
   if (pi.num_nzctxs == 0) {
@@ -481,6 +546,7 @@ readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
 }
 
 namespace {
+// Helper structure for the non-metric data loaded for a profile
 struct ProfileData {
   // Offset of the data block for this profile in the file
   uint64_t offset;
@@ -490,6 +556,7 @@ struct ProfileData {
   std::vector<std::pair<uint32_t, uint64_t>> ctxPairs;
 };
 
+// Helper structure for the metric data loaded for a profile
 struct LoadedProfile {
   // First loaded ctx_id/idx pair
   std::vector<std::pair<uint32_t, uint64_t>>::const_iterator first;
@@ -502,13 +569,13 @@ struct LoadedProfile {
 
   LoadedProfile() = default;
 
-  // Load a profile's data from the given File and data
   LoadedProfile(
       uint32_t firstCtx, uint32_t lastCtx, const util::File& pmf, uint64_t offset, uint32_t index,
       const std::vector<std::pair<uint32_t, uint64_t>>& ctxPairs);
 };
 }  // namespace
 
+// Load a profile's metric data from the given File and data
 LoadedProfile::LoadedProfile(
     uint32_t firstCtx, uint32_t lastCtx, const util::File& pmf, const uint64_t offset,
     const uint32_t index, const std::vector<std::pair<uint32_t, uint64_t>>& ctxPairs)
@@ -543,6 +610,7 @@ LoadedProfile::LoadedProfile(
   pmfi.readat(offset + first->second * PMS_vm_pair_SIZE, mvBlob.size(), mvBlob.data());
 }
 
+// Transpose and write the metric data for a range of contexts
 static void writeContexts(
     uint32_t firstCtx, uint32_t lastCtx, const util::File& cmf,
     const std::deque<LoadedProfile>& loadedProfiles, const std::vector<uint64_t>& ctxOffsets) {
@@ -674,7 +742,7 @@ void SparseDB::write() {
     forEachProfileInfo.contribute(forEachProfileInfo.wait());
   }
 
-  // Lay out the cct.db metric data section, last is total size.
+  // Lay out the cct.db metric data section, in terms of offsets for every context
   auto ctxcnt = mpi::bcast(contexts.size(), 0);
   std::vector<uint64_t> ctxOffsets(ctxcnt + 1, 0);
   for (const Context& c : contexts) {
@@ -709,9 +777,11 @@ void SparseDB::write() {
         ctxOffsets[i] += (udc.nMetrics + 1) * CMS_m_pair_SIZE;
     }
   }
+  // Exclusive scan to get offsets. Rank 0 adds the initial offset for the section
   std::exclusive_scan(
       ctxOffsets.begin(), ctxOffsets.end(), ctxOffsets.begin(),
       mpi::World::rank() == 0 ? align(ctxcnt * CMS_ctx_info_SIZE, 8) + CMS_hdr_SIZE : 0);
+  // All-reduce the offsets to get global offsets incorporating everyone
   ctxOffsets = mpi::allreduce(ctxOffsets, mpi::Op::sum());
 
   // Divide the contexts into ranges of easily distributable sizes
@@ -732,12 +802,12 @@ void SparseDB::write() {
     ctxRanges.push_back(ctxcnt);
   }
 
-  // Initialize the ctx group counter, for dynamic distribution
-  // All ranks other than rank 0 get a pre-allocated ctx group
+  // We use a SharedAccumulator to dynamically distribute context ranges across
+  // the ranks. All ranks other than rank 0 get a pre-allocated context range
+  mpi::SharedAccumulator ctxRangeCounter(mpi::Tag::SparseDB_2);
   ctxRangeCounter.initialize(mpi::World::size() - 1);
 
-  // Pop open the cct.db file, and synchronize.
-  cmf = util::File(dir / "cct.db", true);
+  // Synchronize cct.db across the ranks
   cmf->synchronize();
 
   // Read and parse the Profile Info section of the final profile.db
@@ -929,64 +999,5 @@ void SparseDB::write() {
     const uint64_t footer = CCTDBftr;
     auto cmfi = cmf->open(true, false);
     cmfi.writeat(ctxOffsets.back(), sizeof footer, &footer);
-  }
-}
-
-SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
-
-void SparseDB::DoubleBufferedOutput::initialize(util::File& outfile, uint64_t startOffset) {
-  file = outfile;
-  pos.initialize(startOffset);
-}
-
-uint64_t SparseDB::DoubleBufferedOutput::allocate(uint64_t size) {
-  return pos.fetch_add(size);
-}
-
-void SparseDB::DoubleBufferedOutput::write(
-    const std::vector<char>& mvBlob, const std::vector<char>& ciBlob, uint64_t& offset) {
-  assert(file);
-
-  // Lock up the top-level state and inner Buffer
-  std::unique_lock<std::mutex> topl(toplock);
-  Buffer& buf = bufs[currentBuf];
-  std::unique_lock<std::mutex> lowl(buf.lowlock);
-
-  // If the Buffer will be full after our addition, we'll have to flush it
-  // afterwards. Let other threads progress in this case by rotating buffers.
-  bool needsFlush = buf.blob.size() + mvBlob.size() + ciBlob.size() >= Buffer::bufferSize;
-  if (needsFlush)
-    currentBuf = (currentBuf + 1) % bufs.size();
-  topl.unlock();  // Let other threads progress in the other Buffer now
-
-  // Record the relative offset and append our new bytes to our Buffer
-  offset = buf.blob.size();
-  buf.toUpdate.push_back(offset);
-  buf.blob.insert(buf.blob.end(), mvBlob.begin(), mvBlob.end());
-  buf.blob.insert(buf.blob.end(), ciBlob.begin(), ciBlob.end());
-
-  if (needsFlush)
-    buf.flush(*file, allocate(buf.blob.size()));
-}
-
-void SparseDB::DoubleBufferedOutput::Buffer::flush(util::File& file, uint64_t offset) {
-  if (!blob.empty())
-    file.open(true, true).writeat(offset, blob.size(), blob.data());
-
-  // Update the saved offsets with the final answers
-  for (uint64_t& target : toUpdate)
-    target += offset;
-
-  // Reset this Buffer for the next time around
-  blob.clear();
-  blob.reserve(bufferSize);
-  toUpdate.clear();
-}
-
-void SparseDB::DoubleBufferedOutput::flush() {
-  assert(file);
-  for (Buffer& buf : bufs) {
-    std::unique_lock<std::mutex> l(buf.lowlock);
-    buf.flush(*file, allocate(buf.blob.size()));
   }
 }
