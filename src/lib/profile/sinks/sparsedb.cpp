@@ -249,6 +249,11 @@ SparseDB::SparseDB(stdshim::filesystem::path p)
     util::log::fatal{} << "SparseDB doesn't allow for dry runs!";
   else
     stdshim::filesystem::create_directory(dir);
+
+  // Dump the FORMATS.md file
+  try {
+    std::ofstream(dir / "FORMATS.md") << FORMATS_md;
+  } catch (std::exception& e) { util::log::warning{} << "Error while writing out FORMATS.md file"; }
 }
 
 util::WorkshareResult SparseDB::help() {
@@ -476,12 +481,13 @@ void SparseDB::write() {
 
   // gather cct major data
   ctxcnt = mpi::bcast(contexts.size(), 0);
+  cctdbSetUp();
 
-  // Rank 0 writes out the summary profile, but we fuse a few loops here
-  std::vector<char> mvPairsBuf;
-  std::vector<char> ciPairsBuf;
+  // Rank 0 writes out the summary profile
   if (mpi::World::rank() == 0) {
     // Allocate the blobs needed for the final output
+    std::vector<char> mvPairsBuf;
+    std::vector<char> ciPairsBuf;
     ciPairsBuf.reserve((contexts.size() + 1) * PMS_ctx_pair_SIZE);
 
     // Helper functions to insert ctx_id/idx pairs and metric/value pairs
@@ -527,14 +533,7 @@ void SparseDB::write() {
 
     // Add the extra ctx id and offset pair, to mark the end of ctx
     addCiPair(LastNodeEnd, mvPairsBuf.size() / PMS_vm_pair_SIZE);
-  }
 
-  // Now the data is ready for the initial cct.db distribution bits, so start
-  // that off as early as we can.
-  cctdbSetUp();
-
-  // Back to rank 0 for writing out the summary profile
-  if (mpi::World::rank() == 0) {
     // Build prof_info
     summary_info.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
     summary_info.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
@@ -556,11 +555,6 @@ void SparseDB::write() {
 
   // do the actual main reads and writes of cct.db
   writeCCTDB();
-
-  // Dump the FORMATS.md file
-  try {
-    std::ofstream(dir / "FORMATS.md") << FORMATS_md;
-  } catch (std::exception& e) { util::log::warning{} << "Error while writing out FORMATS.md file"; }
 }
 
 SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
