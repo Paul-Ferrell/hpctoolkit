@@ -244,7 +244,7 @@ static char* insertCtxInfo(char* cur, cms_ctx_info_t ci) {
 }
 
 SparseDB::SparseDB(stdshim::filesystem::path p)
-    : dir(std::move(p)), groupCounter(mpi::Tag::SparseDB_2) {
+    : dir(std::move(p)), ctxRangeCounter(mpi::Tag::SparseDB_2) {
   if (dir.empty())
     util::log::fatal{} << "SparseDB doesn't allow for dry runs!";
   else
@@ -278,7 +278,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   if (!d.hasContexts() || !d.hasThreads())
     return;
   auto mpiSem = src.enterOrderedWavefront();
-  auto sig = contextWavefront.signal();
+  auto sig = wavefrontDone.signal();
 
   // Fill contexts with the sorted list of Contexts
   assert(contexts.empty());
@@ -311,7 +311,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   uint64_t profInfosSize = nProf * PMS_prof_info_SIZE;
 
   // Write out our part of the id tuples section, and figure out its final size
-  uint64_t idTuplesPtr = profInfosPtr + align(profInfosSize, 8);
+  uint64_t idTuplesPtr = PMS_hdr_SIZE + align(profInfosSize, 8);
   uint64_t idTuplesSize;
   {
     std::vector<char> buf;
@@ -377,7 +377,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
 
   // Rank 0 writes out the final file header
   if (mpi::World::rank() == 0) {
-    auto buf = composeProfHdr(nProf, profInfosPtr, profInfosSize, idTuplesPtr, idTuplesSize);
+    auto buf = composeProfHdr(nProf, PMS_hdr_SIZE, profInfosSize, idTuplesPtr, idTuplesSize);
     pmf->open(true, false).writeat(0, buf.size(), buf.data());
   }
 
@@ -387,7 +387,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
 
 void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
   const auto& t = tt.thread();
-  contextWavefront.wait();
+  wavefrontDone.wait();
 
   // Allocate the blobs needed for the final output
   std::vector<char> mvPairsBuf;
@@ -458,164 +458,6 @@ void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
   profDataOut.write(mvPairsBuf, ciPairsBuf, pi.offset);
 }
 
-void SparseDB::write() {
-  auto mpiSem = src.enterOrderedWrite();
-
-  // Make sure all the profile data is on disk and all offsets are updated
-  profDataOut.flush();
-
-  // Now that the profile infos are up-to-date, write them all in parallel
-  {
-    std::vector<std::reference_wrapper<const pms_profile_info_t>> prof_infos;
-    prof_infos.reserve(src.threads().size());
-    for (const auto& t : src.threads().citerate())
-      prof_infos.push_back(t->userdata[ud].info);
-
-    forEachProfileInfo.fill(std::move(prof_infos), [&](const pms_profile_info_t& pi) {
-      auto buf = composeProfInfo(pi);
-      auto fhi = pmf->open(true, false);
-      fhi.writeat(profInfosPtr + pi.prof_info_idx * PMS_prof_info_SIZE, buf.size(), buf.data());
-    });
-    forEachProfileInfo.contribute(forEachProfileInfo.wait());
-  }
-
-  // gather cct major data
-  ctxcnt = mpi::bcast(contexts.size(), 0);
-  cctdbSetUp();
-
-  // Rank 0 writes out the summary profile
-  if (mpi::World::rank() == 0) {
-    // Allocate the blobs needed for the final output
-    std::vector<char> mvPairsBuf;
-    std::vector<char> ciPairsBuf;
-    ciPairsBuf.reserve((contexts.size() + 1) * PMS_ctx_pair_SIZE);
-
-    // Helper functions to insert ctx_id/idx pairs and metric/value pairs
-    const auto addCiPair = [&](uint32_t ctxId, uint64_t index) {
-      auto oldsz = ciPairsBuf.size();
-      ciPairsBuf.resize(oldsz + PMS_ctx_pair_SIZE, 0);
-      insertCiPair(&ciPairsBuf[oldsz], ctxId, index);
-    };
-    const auto addMvPair = [&](uint16_t metric, double value) {
-      auto oldsz = mvPairsBuf.size();
-      mvPairsBuf.resize(oldsz + PMS_vm_pair_SIZE, 0);
-      insertMvPair(&mvPairsBuf[oldsz], metric, value);
-    };
-
-    // Now stitch together each Context's results
-    for (const Context& c : contexts) {
-      const auto& stats = c.data().statistics();
-      if (stats.size() > 0)
-        addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
-      for (const auto& mx : stats.citerate()) {
-        const Metric& m = mx.first;
-        if (!m.scopes().has(MetricScope::function) || !m.scopes().has(MetricScope::execution))
-          util::log::fatal{} << "Metric isn't function/execution!";
-        const auto& id = m.userdata[src.identifier()];
-        const auto& vv = mx.second;
-        for (const auto& sp : m.partials()) {
-          if (auto vex = vv.get(sp).get(MetricScope::function)) {
-            addMvPair(id.getFor(sp, MetricScope::function), *vex);
-            // HACK conditional to work around experiment.xml. Line Scopes are
-            // emitted as leaves (<S>), so they should have no extra inclusive cost.
-            if (c.scope().flat().type() == Scope::Type::line)
-              addMvPair(id.getFor(sp, MetricScope::execution), *vex);
-          }
-          // HACK conditional to work around experiment.xml. Line Scopes are
-          // emitted as leaves (<S>), so they should have no extra inclusive cost.
-          if (c.scope().flat().type() != Scope::Type::line) {
-            if (auto vinc = vv.get(sp).get(MetricScope::execution))
-              addMvPair(id.getFor(sp, MetricScope::execution), *vinc);
-          }
-        }
-      }
-    }
-
-    // Add the extra ctx id and offset pair, to mark the end of ctx
-    addCiPair(LastNodeEnd, mvPairsBuf.size() / PMS_vm_pair_SIZE);
-
-    // Build prof_info
-    summary_info.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
-    summary_info.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
-
-    // Write the summary profile out and make sure it makes it to disk
-    profDataOut.write(std::move(mvPairsBuf), std::move(ciPairsBuf), summary_info.offset);
-    profDataOut.flush();
-
-    // Write the summary info, which is always profile index 0
-    auto pmfi = pmf->open(true, false);
-    auto buf = composeProfInfo(summary_info);
-    pmfi.writeat(profInfosPtr, buf.size(), buf.data());
-
-    // Write out the footer to indicate that profile.db is complete
-    auto footer_val = PROFDBft;
-    uint64_t footer_off = profDataOut.allocate(sizeof(footer_val));
-    pmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
-  }
-
-  // do the actual main reads and writes of cct.db
-  writeCCTDB();
-}
-
-SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
-
-void SparseDB::DoubleBufferedOutput::initialize(util::File& outfile, uint64_t startOffset) {
-  file = outfile;
-  pos.initialize(startOffset);
-}
-
-uint64_t SparseDB::DoubleBufferedOutput::allocate(uint64_t size) {
-  return pos.fetch_add(size);
-}
-
-void SparseDB::DoubleBufferedOutput::write(
-    const std::vector<char>& mvBlob, const std::vector<char>& ciBlob, uint64_t& offset) {
-  assert(file);
-
-  // Lock up the top-level state and inner Buffer
-  std::unique_lock<std::mutex> topl(toplock);
-  Buffer& buf = bufs[currentBuf];
-  std::unique_lock<std::mutex> lowl(buf.lowlock);
-
-  // If the Buffer will be full after our addition, we'll have to flush it
-  // afterwards. Let other threads progress in this case by rotating buffers.
-  bool needsFlush = buf.blob.size() + mvBlob.size() + ciBlob.size() >= Buffer::bufferSize;
-  if (needsFlush)
-    currentBuf = (currentBuf + 1) % bufs.size();
-  topl.unlock();  // Let other threads progress in the other Buffer now
-
-  // Record the relative offset and append our new bytes to our Buffer
-  offset = buf.blob.size();
-  buf.toUpdate.push_back(offset);
-  buf.blob.insert(buf.blob.end(), mvBlob.begin(), mvBlob.end());
-  buf.blob.insert(buf.blob.end(), ciBlob.begin(), ciBlob.end());
-
-  if (needsFlush)
-    buf.flush(*file, allocate(buf.blob.size()));
-}
-
-void SparseDB::DoubleBufferedOutput::Buffer::flush(util::File& file, uint64_t offset) {
-  if (!blob.empty())
-    file.open(true, true).writeat(offset, blob.size(), blob.data());
-
-  // Update the saved offsets with the final answers
-  for (uint64_t& target : toUpdate)
-    target += offset;
-
-  // Reset this Buffer for the next time around
-  blob.clear();
-  blob.reserve(bufferSize);
-  toUpdate.clear();
-}
-
-void SparseDB::DoubleBufferedOutput::flush() {
-  assert(file);
-  for (Buffer& buf : bufs) {
-    std::unique_lock<std::mutex> l(buf.lowlock);
-    buf.flush(*file, allocate(buf.blob.size()));
-  }
-}
-
 static std::vector<std::pair<uint32_t, uint64_t>>
 readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
   if (pi.num_nzctxs == 0) {
@@ -638,97 +480,16 @@ readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
   return prof_ctx_pairs;
 }
 
-void SparseDB::cctdbSetUp() {
-  // Lay out the cct.db metric data section, last is total size.
-  ctxOffsets = std::vector<uint64_t>(ctxcnt + 1, 0);
-  for (const Context& c : contexts) {
-    const auto i = c.userdata[src.identifier()];
-    assert(&c == &contexts[i].get());
-    auto& udc = c.userdata[ud];
-    ctxOffsets[i] = udc.nValues.load(std::memory_order_relaxed) * CMS_val_prof_idx_pair_SIZE;
-
-    // Rank 0 has the final number of metric/idx pairs
-    if (mpi::World::rank() == 0) {
-      const auto& use = c.data().metricUsage();
-      auto iter = use.citerate();
-      bool isLine = c.scope().flat().type() == Scope::Type::line;
-      udc.nMetrics = std::accumulate(
-          iter.begin(), iter.end(), (uint16_t)0,
-          [isLine](uint16_t out, const auto& mu) -> uint16_t {
-            MetricScopeSet use = mu.second;
-            assert((mu.first->scopes() & use) == use && "Inconsistent Metric value usage data!");
-            // HACK conditional to work around experiment.xml. See above.
-            if (isLine) {
-              if (use.has(MetricScope::function))
-                out += 2;
-            } else {
-              if (use.has(MetricScope::function))
-                out++;
-              if (use.has(MetricScope::execution))
-                out++;
-            }
-            return out;
-          });
-      if (udc.nMetrics > 0)
-        ctxOffsets[i] += (udc.nMetrics + 1) * CMS_m_pair_SIZE;
-    }
-  }
-  std::exclusive_scan(
-      ctxOffsets.begin(), ctxOffsets.end(), ctxOffsets.begin(),
-      mpi::World::rank() == 0 ? align(ctxcnt * CMS_ctx_info_SIZE, 8) + CMS_hdr_SIZE : 0);
-  ctxOffsets = mpi::allreduce(ctxOffsets, mpi::Op::sum());
-
-  // Divide the contexts into groups of easily distributable sizes
-  ctxGroups.clear();
-  {
-    ctxGroups.push_back(0);
-    const uint64_t limit =
-        std::min<uint64_t>(1024ULL * 1024 * 1024 * 3, ctxOffsets.back() / (3 * mpi::World::size()));
-    uint64_t cursize = 0;
-    for (size_t i = 0; i < ctxcnt; i++) {
-      const uint64_t size = ctxOffsets[i + 1] - ctxOffsets[i];
-      if (cursize + size > limit) {
-        ctxGroups.push_back(i);
-        cursize = 0;
-      }
-      cursize += size;
-    }
-    ctxGroups.push_back(ctxcnt);
-  }
-
-  // Initialize the ctx group counter, for dynamic distribution
-  // All ranks other than rank 0 get a pre-allocated ctx group
-  groupCounter.initialize(mpi::World::size() - 1);
-
-  // Pop open the cct.db file, and synchronize.
-  cmf = util::File(dir / "cct.db", true);
-  cmf->synchronize();
-
-  // Read and parse the Profile Info section of the final profile.db
-  {
-    auto fi = pmf->open(false, false);
-    uint32_t nProf =
-        readAsByte4(fi, HPCPROFILESPARSE_FMT_MagicLen + HPCPROFILESPARSE_FMT_VersionLen);
-
-    // Read the whole section in, skipping over the index 0 summary profile
-    std::vector<char> buf((nProf - 1) * PMS_prof_info_SIZE);
-    fi.readat(PMS_hdr_SIZE + PMS_prof_info_SIZE, buf.size(), buf.data());
-
-    // Load the data we need from the profile.db, in parallel
-    profiles = std::deque<ProfileData>(nProf - 1);
-    forProfilesParse.fill(profiles.size(), [this, &buf](size_t i) {
-      auto pi = parseProfInfo(&buf[i * PMS_prof_info_SIZE]);
-      profiles[i] = {
-          .offset = pi.offset,
-          .index = (uint32_t)(i + 1),
-          .ctxPairs = readProfileCtxPairs(*pmf, pi),
-      };
-    });
-    forProfilesParse.contribute(forProfilesParse.wait());
-  }
-}
-
 namespace {
+struct ProfileData {
+  // Offset of the data block for this profile in the file
+  uint64_t offset;
+  // Absolute index of this profile
+  uint32_t index;
+  // Preparsed ctx_id/idx pairs
+  std::vector<std::pair<uint32_t, uint64_t>> ctxPairs;
+};
+
 struct LoadedProfile {
   // First loaded ctx_id/idx pair
   std::vector<std::pair<uint32_t, uint64_t>>::const_iterator first;
@@ -892,45 +653,228 @@ static void writeContexts(
   cmfi.writeat(ctxOffsets[firstCtxId], buf.size(), buf.data());
 }
 
-void SparseDB::writeCCTDB() {
-  if (mpi::World::rank() == 0) {
-    // Rank 0 is in charge of writing the header and context info sections
-    auto cmfi = cmf->open(true, true);
+void SparseDB::write() {
+  auto mpiSem = src.enterOrderedWrite();
 
-    auto hdr = composeCtxHdr(ctxcnt);
-    cmfi.writeat(0, hdr.size(), hdr.data());
+  // Make sure all the profile data is on disk and all offsets are updated
+  profDataOut.flush();
 
-    std::vector<char> buf(ctxcnt * CMS_ctx_info_SIZE);
-    char* cur = buf.data();
-    for (uint32_t i = 0; i < ctxcnt; i++) {
-      uint16_t nMetrics = contexts[i].get().userdata[ud].nMetrics;
-      uint64_t nVals = nMetrics == 0
-                         ? 0
-                         : (ctxOffsets[i + 1] - ctxOffsets[i] - (nMetrics + 1) * CMS_m_pair_SIZE)
-                               / CMS_val_prof_idx_pair_SIZE;
-      cur = insertCtxInfo(
-          cur, {
-                   .ctx_id = i,
-                   .num_vals = nVals,
-                   .num_nzmids = nMetrics,
-                   .offset = ctxOffsets[i],
-               });
+  // Now that the profile infos are up-to-date, write them all in parallel
+  {
+    std::vector<std::reference_wrapper<const pms_profile_info_t>> prof_infos;
+    prof_infos.reserve(src.threads().size());
+    for (const auto& t : src.threads().citerate())
+      prof_infos.push_back(t->userdata[ud].info);
+
+    forEachProfileInfo.fill(std::move(prof_infos), [&](const pms_profile_info_t& pi) {
+      auto buf = composeProfInfo(pi);
+      auto fhi = pmf->open(true, false);
+      fhi.writeat(PMS_hdr_SIZE + pi.prof_info_idx * PMS_prof_info_SIZE, buf.size(), buf.data());
+    });
+    forEachProfileInfo.contribute(forEachProfileInfo.wait());
+  }
+
+  // Lay out the cct.db metric data section, last is total size.
+  auto ctxcnt = mpi::bcast(contexts.size(), 0);
+  std::vector<uint64_t> ctxOffsets(ctxcnt + 1, 0);
+  for (const Context& c : contexts) {
+    const auto i = c.userdata[src.identifier()];
+    assert(&c == &contexts[i].get());
+    auto& udc = c.userdata[ud];
+    ctxOffsets[i] = udc.nValues.load(std::memory_order_relaxed) * CMS_val_prof_idx_pair_SIZE;
+
+    // Rank 0 has the final number of metric/idx pairs
+    if (mpi::World::rank() == 0) {
+      const auto& use = c.data().metricUsage();
+      auto iter = use.citerate();
+      bool isLine = c.scope().flat().type() == Scope::Type::line;
+      udc.nMetrics = std::accumulate(
+          iter.begin(), iter.end(), (uint16_t)0,
+          [isLine](uint16_t out, const auto& mu) -> uint16_t {
+            MetricScopeSet use = mu.second;
+            assert((mu.first->scopes() & use) == use && "Inconsistent Metric value usage data!");
+            // HACK conditional to work around experiment.xml. See above.
+            if (isLine) {
+              if (use.has(MetricScope::function))
+                out += 2;
+            } else {
+              if (use.has(MetricScope::function))
+                out++;
+              if (use.has(MetricScope::execution))
+                out++;
+            }
+            return out;
+          });
+      if (udc.nMetrics > 0)
+        ctxOffsets[i] += (udc.nMetrics + 1) * CMS_m_pair_SIZE;
     }
-    cmfi.writeat(CMS_hdr_SIZE, buf.size(), buf.data());
+  }
+  std::exclusive_scan(
+      ctxOffsets.begin(), ctxOffsets.end(), ctxOffsets.begin(),
+      mpi::World::rank() == 0 ? align(ctxcnt * CMS_ctx_info_SIZE, 8) + CMS_hdr_SIZE : 0);
+  ctxOffsets = mpi::allreduce(ctxOffsets, mpi::Op::sum());
+
+  // Divide the contexts into ranges of easily distributable sizes
+  std::vector<uint32_t> ctxRanges;
+  {
+    ctxRanges.push_back(0);
+    const uint64_t limit =
+        std::min<uint64_t>(1024ULL * 1024 * 1024 * 3, ctxOffsets.back() / (3 * mpi::World::size()));
+    uint64_t cursize = 0;
+    for (size_t i = 0; i < ctxcnt; i++) {
+      const uint64_t size = ctxOffsets[i + 1] - ctxOffsets[i];
+      if (cursize + size > limit) {
+        ctxRanges.push_back(i);
+        cursize = 0;
+      }
+      cursize += size;
+    }
+    ctxRanges.push_back(ctxcnt);
+  }
+
+  // Initialize the ctx group counter, for dynamic distribution
+  // All ranks other than rank 0 get a pre-allocated ctx group
+  ctxRangeCounter.initialize(mpi::World::size() - 1);
+
+  // Pop open the cct.db file, and synchronize.
+  cmf = util::File(dir / "cct.db", true);
+  cmf->synchronize();
+
+  // Read and parse the Profile Info section of the final profile.db
+  std::deque<ProfileData> profiles;
+  {
+    auto fi = pmf->open(false, false);
+    uint32_t nProf =
+        readAsByte4(fi, HPCPROFILESPARSE_FMT_MagicLen + HPCPROFILESPARSE_FMT_VersionLen);
+
+    // Read the whole section in, skipping over the index 0 summary profile
+    std::vector<char> buf((nProf - 1) * PMS_prof_info_SIZE);
+    fi.readat(PMS_hdr_SIZE + PMS_prof_info_SIZE, buf.size(), buf.data());
+
+    // Load the data we need from the profile.db, in parallel
+    profiles = std::deque<ProfileData>(nProf - 1);
+    forProfilesParse.fill(profiles.size(), [this, &buf, &profiles](size_t i) {
+      auto pi = parseProfInfo(&buf[i * PMS_prof_info_SIZE]);
+      profiles[i] = {
+          .offset = pi.offset,
+          .index = (uint32_t)(i + 1),
+          .ctxPairs = readProfileCtxPairs(*pmf, pi),
+      };
+    });
+    forProfilesParse.contribute(forProfilesParse.wait());
+  }
+
+  if (mpi::World::rank() == 0) {
+    // Rank 0 is in charge of writing out the summary profile in profile.db
+    {
+      // Allocate the blobs needed for the final output
+      std::vector<char> mvPairsBuf;
+      std::vector<char> ciPairsBuf;
+      ciPairsBuf.reserve((contexts.size() + 1) * PMS_ctx_pair_SIZE);
+
+      // Helper functions to insert ctx_id/idx pairs and metric/value pairs
+      const auto addCiPair = [&](uint32_t ctxId, uint64_t index) {
+        auto oldsz = ciPairsBuf.size();
+        ciPairsBuf.resize(oldsz + PMS_ctx_pair_SIZE, 0);
+        insertCiPair(&ciPairsBuf[oldsz], ctxId, index);
+      };
+      const auto addMvPair = [&](uint16_t metric, double value) {
+        auto oldsz = mvPairsBuf.size();
+        mvPairsBuf.resize(oldsz + PMS_vm_pair_SIZE, 0);
+        insertMvPair(&mvPairsBuf[oldsz], metric, value);
+      };
+
+      // Now stitch together each Context's results
+      for (const Context& c : contexts) {
+        const auto& stats = c.data().statistics();
+        if (stats.size() > 0)
+          addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
+        for (const auto& mx : stats.citerate()) {
+          const Metric& m = mx.first;
+          if (!m.scopes().has(MetricScope::function) || !m.scopes().has(MetricScope::execution))
+            util::log::fatal{} << "Metric isn't function/execution!";
+          const auto& id = m.userdata[src.identifier()];
+          const auto& vv = mx.second;
+          for (const auto& sp : m.partials()) {
+            if (auto vex = vv.get(sp).get(MetricScope::function)) {
+              addMvPair(id.getFor(sp, MetricScope::function), *vex);
+              // HACK conditional to work around experiment.xml. Line Scopes are
+              // emitted as leaves (<S>), so they should have no extra inclusive cost.
+              if (c.scope().flat().type() == Scope::Type::line)
+                addMvPair(id.getFor(sp, MetricScope::execution), *vex);
+            }
+            // HACK conditional to work around experiment.xml. Line Scopes are
+            // emitted as leaves (<S>), so they should have no extra inclusive cost.
+            if (c.scope().flat().type() != Scope::Type::line) {
+              if (auto vinc = vv.get(sp).get(MetricScope::execution))
+                addMvPair(id.getFor(sp, MetricScope::execution), *vinc);
+            }
+          }
+        }
+      }
+
+      // Add the extra ctx id and offset pair, to mark the end of ctx
+      addCiPair(LastNodeEnd, mvPairsBuf.size() / PMS_vm_pair_SIZE);
+
+      // Build prof_info
+      summary_info.num_vals = mvPairsBuf.size() / PMS_vm_pair_SIZE;
+      summary_info.num_nzctxs = ciPairsBuf.size() / PMS_ctx_pair_SIZE - 1;
+
+      // Write the summary profile out and make sure it makes it to disk
+      profDataOut.write(std::move(mvPairsBuf), std::move(ciPairsBuf), summary_info.offset);
+      profDataOut.flush();
+
+      // Write the summary info, which is always profile index 0
+      auto pmfi = pmf->open(true, false);
+      auto buf = composeProfInfo(summary_info);
+      pmfi.writeat(PMS_hdr_SIZE, buf.size(), buf.data());
+
+      // Write out the footer to indicate that profile.db is complete
+      auto footer_val = PROFDBft;
+      uint64_t footer_off = profDataOut.allocate(sizeof(footer_val));
+      pmfi.writeat(footer_off, sizeof(footer_val), &footer_val);
+    }
+
+    // Rank 0 is also in charge of writing the header and context info sections
+    // in the cct.db
+    {
+      auto cmfi = cmf->open(true, true);
+
+      auto hdr = composeCtxHdr(ctxcnt);
+      cmfi.writeat(0, hdr.size(), hdr.data());
+
+      std::vector<char> buf(ctxcnt * CMS_ctx_info_SIZE);
+      char* cur = buf.data();
+      for (uint32_t i = 0; i < ctxcnt; i++) {
+        uint16_t nMetrics = contexts[i].get().userdata[ud].nMetrics;
+        uint64_t nVals = nMetrics == 0
+                           ? 0
+                           : (ctxOffsets[i + 1] - ctxOffsets[i] - (nMetrics + 1) * CMS_m_pair_SIZE)
+                                 / CMS_val_prof_idx_pair_SIZE;
+        cur = insertCtxInfo(
+            cur, {
+                     .ctx_id = i,
+                     .num_vals = nVals,
+                     .num_nzmids = nMetrics,
+                     .offset = ctxOffsets[i],
+                 });
+      }
+      cmfi.writeat(CMS_hdr_SIZE, buf.size(), buf.data());
+    }
   }
 
   // Transpose and copy context data until we're done
   uint32_t idx = mpi::World::rank() > 0 ? mpi::World::rank() - 1  // Pre-allocation
-                                        : groupCounter.fetch_add(1);
-  while (idx < ctxGroups.size() - 1) {
+                                        : ctxRangeCounter.fetch_add(1);
+  while (idx < ctxRanges.size() - 1) {
     // Process the next range of contexts allocated to us
-    auto firstCtx = ctxGroups[idx];
-    auto lastCtx = ctxGroups[idx + 1];
+    auto firstCtx = ctxRanges[idx];
+    auto lastCtx = ctxRanges[idx + 1];
     if (firstCtx < lastCtx) {
       // Read the blob of data we need from each profile, in parallel
       std::deque<LoadedProfile> loadedProfiles(profiles.size());
       forProfilesLoad.fill(
-          loadedProfiles.size(), [this, &loadedProfiles, firstCtx, lastCtx](size_t i) {
+          loadedProfiles.size(), [this, &loadedProfiles, firstCtx, lastCtx, &profiles](size_t i) {
             const auto& p = profiles[i];
             loadedProfiles[i] =
                 LoadedProfile(firstCtx, lastCtx, *pmf, p.offset, p.index, p.ctxPairs);
@@ -961,14 +905,15 @@ void SparseDB::writeCCTDB() {
       }
 
       // Handle the individual ctx copies
-      forEachContextRange.fill(std::move(ctxRanges), [this, &loadedProfiles](const auto& range) {
-        writeContexts(range.first, range.second, *cmf, loadedProfiles, ctxOffsets);
-      });
+      forEachContextRange.fill(
+          std::move(ctxRanges), [this, &loadedProfiles, &ctxOffsets](const auto& range) {
+            writeContexts(range.first, range.second, *cmf, loadedProfiles, ctxOffsets);
+          });
       forEachContextRange.reset();
     }
 
     // Fetch the next available workitem from the group
-    idx = groupCounter.fetch_add(1);
+    idx = ctxRangeCounter.fetch_add(1);
   }
 
   // Notify our helper threads that the workshares are complete now
@@ -984,5 +929,64 @@ void SparseDB::writeCCTDB() {
     const uint64_t footer = CCTDBftr;
     auto cmfi = cmf->open(true, false);
     cmfi.writeat(ctxOffsets.back(), sizeof footer, &footer);
+  }
+}
+
+SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
+
+void SparseDB::DoubleBufferedOutput::initialize(util::File& outfile, uint64_t startOffset) {
+  file = outfile;
+  pos.initialize(startOffset);
+}
+
+uint64_t SparseDB::DoubleBufferedOutput::allocate(uint64_t size) {
+  return pos.fetch_add(size);
+}
+
+void SparseDB::DoubleBufferedOutput::write(
+    const std::vector<char>& mvBlob, const std::vector<char>& ciBlob, uint64_t& offset) {
+  assert(file);
+
+  // Lock up the top-level state and inner Buffer
+  std::unique_lock<std::mutex> topl(toplock);
+  Buffer& buf = bufs[currentBuf];
+  std::unique_lock<std::mutex> lowl(buf.lowlock);
+
+  // If the Buffer will be full after our addition, we'll have to flush it
+  // afterwards. Let other threads progress in this case by rotating buffers.
+  bool needsFlush = buf.blob.size() + mvBlob.size() + ciBlob.size() >= Buffer::bufferSize;
+  if (needsFlush)
+    currentBuf = (currentBuf + 1) % bufs.size();
+  topl.unlock();  // Let other threads progress in the other Buffer now
+
+  // Record the relative offset and append our new bytes to our Buffer
+  offset = buf.blob.size();
+  buf.toUpdate.push_back(offset);
+  buf.blob.insert(buf.blob.end(), mvBlob.begin(), mvBlob.end());
+  buf.blob.insert(buf.blob.end(), ciBlob.begin(), ciBlob.end());
+
+  if (needsFlush)
+    buf.flush(*file, allocate(buf.blob.size()));
+}
+
+void SparseDB::DoubleBufferedOutput::Buffer::flush(util::File& file, uint64_t offset) {
+  if (!blob.empty())
+    file.open(true, true).writeat(offset, blob.size(), blob.data());
+
+  // Update the saved offsets with the final answers
+  for (uint64_t& target : toUpdate)
+    target += offset;
+
+  // Reset this Buffer for the next time around
+  blob.clear();
+  blob.reserve(bufferSize);
+  toUpdate.clear();
+}
+
+void SparseDB::DoubleBufferedOutput::flush() {
+  assert(file);
+  for (Buffer& buf : bufs) {
+    std::unique_lock<std::mutex> l(buf.lowlock);
+    buf.flush(*file, allocate(buf.blob.size()));
   }
 }

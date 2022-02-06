@@ -90,27 +90,27 @@ public:
   void notifyWavefront(hpctoolkit::DataClass) noexcept override;
   void notifyThreadFinal(const hpctoolkit::PerThreadTemporary&) override;
 
-  void cctdbSetUp();
-  void writeCCTDB();
-
 private:
-  // Main database directory path
-  hpctoolkit::stdshim::filesystem::path dir;
+  struct udContext {
+    std::atomic<uint64_t> nValues = 0;
+    uint16_t nMetrics = 0;
+  };
+  struct udThread {
+    pms_profile_info_t info = {
+        .metadata_ptr = 0,
+        .spare_one = 0,
+        .spare_two = 0,
+    };
+  };
+  struct {
+    hpctoolkit::Context::ud_t::typed_member_t<udContext> context;
+    const auto& operator()(hpctoolkit::Context::ud_t&) const noexcept { return context; }
+    hpctoolkit::Thread::ud_t::typed_member_t<udThread> thread;
+    const auto& operator()(hpctoolkit::Thread::ud_t&) const noexcept { return thread; }
+  } ud;
 
   // Once that signals when the Contexts/Threads wavefront has passed
-  hpctoolkit::util::Once contextWavefront;
-
-  // All the contexts we know about, sorted by identifier.
-  std::deque<std::reference_wrapper<const hpctoolkit::Context>> contexts;
-
-  // Total number of Contexts, as seen by Rank 0 (which has all the contexts)
-  std::size_t ctxcnt;
-
-  // profile.db output File
-  std::optional<hpctoolkit::util::File> pmf;
-
-  // Offset of the Profile Info section in profile.db
-  static constexpr uint64_t profInfosPtr = PMS_hdr_SIZE;
+  hpctoolkit::util::Once wavefrontDone;
 
   // Double-buffered concurrent output for profile data, synchronized across
   // multiple MPI ranks.
@@ -174,25 +174,17 @@ private:
     std::array<Buffer, 2> bufs;
   } profDataOut;
 
-  struct udContext {
-    std::atomic<uint64_t> nValues = 0;
-    uint16_t nMetrics = 0;
-  };
-  struct udThread {
-    pms_profile_info_t info = {
-        .metadata_ptr = 0,
-        .spare_one = 0,
-        .spare_two = 0,
-    };
-  };
-  struct {
-    hpctoolkit::Context::ud_t::typed_member_t<udContext> context;
-    const auto& operator()(hpctoolkit::Context::ud_t&) const noexcept { return context; }
-    hpctoolkit::Thread::ud_t::typed_member_t<udThread> thread;
-    const auto& operator()(hpctoolkit::Thread::ud_t&) const noexcept { return thread; }
-  } ud;
+  // Paths and Files
+  hpctoolkit::stdshim::filesystem::path dir;
+  std::optional<hpctoolkit::util::File> pmf;
+  std::optional<hpctoolkit::util::File> cmf;
+
+  // All the contexts we know about, sorted by identifier.
+  // Filled during the Contexts wavefront
+  std::deque<std::reference_wrapper<const hpctoolkit::Context>> contexts;
 
   // prof_info for the summary profile
+  // Filled during the Threads wavefront
   pms_profile_info_t summary_info = {
       .prof_info_idx = 0,
       .metadata_ptr = 0,
@@ -200,32 +192,8 @@ private:
       .spare_two = 0,
   };
 
-  // cct.db output File
-  std::optional<hpctoolkit::util::File> cmf;
-
-  // Byte offset of the start for every Context's data in the resulting cct.db.
-  // Indexed by context id. Last element is the total number of bytes in the file.
-  std::vector<uint64_t> ctxOffsets;
-
-  // Distribution of contexts into dynamically-allocated groups.
-  // Last element is the total number of contexts.
-  std::vector<uint32_t> ctxGroups;
-
-  // Shared accumulator to dynamically allocate groups to MPI ranks
-  hpctoolkit::mpi::SharedAccumulator groupCounter;
-
-  // Useful data for a profile in the profile.db.
-  struct ProfileData {
-    // Offset of the data block for this profile in the file
-    uint64_t offset;
-    // Absolute index of this profile
-    uint32_t index;
-    // Preparsed ctx_id/idx pairs
-    std::vector<std::pair<uint32_t, uint64_t>> ctxPairs;
-  };
-
-  // Data for each of the profiles
-  std::deque<ProfileData> profiles;
+  // Shared accumulator to dynamically allocate context ranges to MPI ranks
+  hpctoolkit::mpi::SharedAccumulator ctxRangeCounter;
 
   // Parallel workshares for the various parallel operations
   hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>>
