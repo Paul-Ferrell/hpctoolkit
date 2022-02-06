@@ -546,8 +546,8 @@ readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
 }
 
 namespace {
-// Helper structure for the non-metric data loaded for a profile
-struct ProfileData {
+// Helper structure for the indices loaded for a profile
+struct ProfileIndexData {
   // Offset of the data block for this profile in the file
   uint64_t offset;
   // Absolute index of this profile
@@ -556,8 +556,9 @@ struct ProfileData {
   std::vector<std::pair<uint32_t, uint64_t>> ctxPairs;
 };
 
-// Helper structure for the metric data loaded for a profile
-struct LoadedProfile {
+// Helper structure for the metric data loaded for a profile, which is always
+// limited by a context range
+struct ProfileMetricData {
   // First loaded ctx_id/idx pair
   std::vector<std::pair<uint32_t, uint64_t>>::const_iterator first;
   // Last (one-after-end) loaded ctx_id/idx pair
@@ -567,16 +568,16 @@ struct LoadedProfile {
   // Loaded metric/value blob for the profile, in the [first, last) ctx range
   std::vector<char> mvBlob;
 
-  LoadedProfile() = default;
+  ProfileMetricData() = default;
 
-  LoadedProfile(
+  ProfileMetricData(
       uint32_t firstCtx, uint32_t lastCtx, const util::File& pmf, uint64_t offset, uint32_t index,
       const std::vector<std::pair<uint32_t, uint64_t>>& ctxPairs);
 };
 }  // namespace
 
 // Load a profile's metric data from the given File and data
-LoadedProfile::LoadedProfile(
+ProfileMetricData::ProfileMetricData(
     uint32_t firstCtx, uint32_t lastCtx, const util::File& pmf, const uint64_t offset,
     const uint32_t index, const std::vector<std::pair<uint32_t, uint64_t>>& ctxPairs)
     : first(ctxPairs.begin()), last(ctxPairs.begin()), index(index) {
@@ -613,13 +614,11 @@ LoadedProfile::LoadedProfile(
 // Transpose and write the metric data for a range of contexts
 static void writeContexts(
     uint32_t firstCtx, uint32_t lastCtx, const util::File& cmf,
-    const std::deque<LoadedProfile>& loadedProfiles, const std::vector<uint64_t>& ctxOffsets) {
-  assert(firstCtx < lastCtx && "Empty ctxRange?");
-
+    const std::deque<ProfileMetricData>& metricData, const std::vector<uint64_t>& ctxOffsets) {
   // Set up a heap with cursors into each profile's data blob
   std::vector<std::pair<
       std::vector<std::pair<uint32_t, uint64_t>>::const_iterator,  // ctx_id/idx pair in a profile
-      std::reference_wrapper<const LoadedProfile>                  // Profile to get data from
+      std::reference_wrapper<const ProfileMetricData>              // Profile to get data from
       >>
       heap;
   const auto heap_comp = [](const auto& a, const auto& b) {
@@ -627,18 +626,18 @@ static void writeContexts(
     return a.first->first != b.first->first ? a.first->first > b.first->first
                                             : a.second.get().index > b.second.get().index;
   };
-  heap.reserve(loadedProfiles.size());
-  for (const auto& lp : loadedProfiles) {
-    if (lp.first == lp.last)
+  heap.reserve(metricData.size());
+  for (const auto& profile : metricData) {
+    if (profile.first == profile.last)
       continue;  // Profile is empty, skip
 
     auto start = std::lower_bound(
-        lp.first, lp.last, std::make_pair(firstCtx, 0),
+        profile.first, profile.last, std::make_pair(firstCtx, 0),
         [](const auto& a, const auto& b) { return a.first < b.first; });
     if (start->first >= lastCtx)
       continue;  // Profile has no data for us, skip
 
-    heap.push_back({start, lp});
+    heap.push_back({start, profile});
   }
   heap.shrink_to_fit();
   std::make_heap(heap.begin(), heap.end(), heap_comp);
@@ -661,8 +660,9 @@ static void writeContexts(
       const auto& curPair = *(heap.back().first++);
 
       // Fill cmb with metric/value pairs for this context, from the top profile
-      const LoadedProfile& lp = heap.back().second;
-      const char* cur = &lp.mvBlob[(curPair.second - lp.first->second) * PMS_vm_pair_SIZE];
+      const ProfileMetricData& profile = heap.back().second;
+      const char* cur =
+          &profile.mvBlob[(curPair.second - profile.first->second) * PMS_vm_pair_SIZE];
       for (uint64_t i = 0, e = heap.back().first->second - curPair.second; i < e;
            i++, cur += PMS_vm_pair_SIZE) {
         allpvs++;
@@ -673,7 +673,7 @@ static void writeContexts(
         // Values are represented the same so they can just be copied.
         subbuf.reserve(subbuf.size() + CMS_val_prof_idx_pair_SIZE);
         subbuf.insert(subbuf.end(), cur, cur + PMS_val_SIZE);
-        insertByte4(&*subbuf.insert(subbuf.end(), CMS_prof_idx_SIZE, 0), lp.index);
+        insertByte4(&*subbuf.insert(subbuf.end(), CMS_prof_idx_SIZE, 0), profile.index);
       }
 
       // If the updated entry is still in range, push it back into the heap.
@@ -811,7 +811,7 @@ void SparseDB::write() {
   cmf->synchronize();
 
   // Read and parse the Profile Info section of the final profile.db
-  std::deque<ProfileData> profiles;
+  std::deque<ProfileIndexData> profiles;
   {
     auto fi = pmf->open(false, false);
     uint32_t nProf =
@@ -822,7 +822,7 @@ void SparseDB::write() {
     fi.readat(PMS_hdr_SIZE + PMS_prof_info_SIZE, buf.size(), buf.data());
 
     // Load the data we need from the profile.db, in parallel
-    profiles = std::deque<ProfileData>(nProf - 1);
+    profiles = std::deque<ProfileIndexData>(nProf - 1);
     forProfilesParse.fill(profiles.size(), [this, &buf, &profiles](size_t i) {
       auto pi = parseProfInfo(&buf[i * PMS_prof_info_SIZE]);
       profiles[i] = {
@@ -942,12 +942,11 @@ void SparseDB::write() {
     auto lastCtx = ctxRanges[idx + 1];
     if (firstCtx < lastCtx) {
       // Read the blob of data we need from each profile, in parallel
-      std::deque<LoadedProfile> loadedProfiles(profiles.size());
+      std::deque<ProfileMetricData> metricData(profiles.size());
       forProfilesLoad.fill(
-          loadedProfiles.size(), [this, &loadedProfiles, firstCtx, lastCtx, &profiles](size_t i) {
+          metricData.size(), [this, &metricData, firstCtx, lastCtx, &profiles](size_t i) {
             const auto& p = profiles[i];
-            loadedProfiles[i] =
-                LoadedProfile(firstCtx, lastCtx, *pmf, p.offset, p.index, p.ctxPairs);
+            metricData[i] = {firstCtx, lastCtx, *pmf, p.offset, p.index, p.ctxPairs};
           });
       forProfilesLoad.reset();  // Also waits for work to complete
 
@@ -976,8 +975,8 @@ void SparseDB::write() {
 
       // Handle the individual ctx copies
       forEachContextRange.fill(
-          std::move(ctxRanges), [this, &loadedProfiles, &ctxOffsets](const auto& range) {
-            writeContexts(range.first, range.second, *cmf, loadedProfiles, ctxOffsets);
+          std::move(ctxRanges), [this, &metricData, &ctxOffsets](const auto& range) {
+            writeContexts(range.first, range.second, *cmf, metricData, ctxOffsets);
           });
       forEachContextRange.reset();
     }
