@@ -94,11 +94,7 @@ public:
   void writeCCTDB();
 
 private:
-//***************************************************************************
-// general
-//***************************************************************************
-#define MULTIPLE_8(v) ((v + 7) & ~7)
-
+  // Main database directory path
   hpctoolkit::stdshim::filesystem::path dir;
 
   // Once that signals when the Contexts/Threads wavefront has passed
@@ -110,20 +106,11 @@ private:
   // Total number of Contexts, as seen by Rank 0 (which has all the contexts)
   std::size_t ctxcnt;
 
-//***************************************************************************
-// profile.db
-//***************************************************************************
-#define IDTUPLE_SUMMARY_LENGTH        1
-#define IDTUPLE_SUMMARY_PROF_INFO_IDX 0
-#define IDTUPLE_SUMMARY_IDX           0  // kind 0 idx 0
-
+  // profile.db output File
   std::optional<hpctoolkit::util::File> pmf;
 
+  // Offset of the Profile Info section in profile.db
   static constexpr uint64_t profInfosPtr = PMS_hdr_SIZE;
-
-  // prof info
-  hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>>
-      forEachProfileInfo;
 
   // Double-buffered concurrent output for profile data, synchronized across
   // multiple MPI ranks.
@@ -213,9 +200,7 @@ private:
       .spare_two = 0,
   };
 
-  //***************************************************************************
-  // cct.db
-  //***************************************************************************
+  // cct.db output File
   std::optional<hpctoolkit::util::File> cmf;
 
   // Byte offset of the start for every Context's data in the resulting cct.db.
@@ -243,6 +228,8 @@ private:
   std::deque<ProfileData> profiles;
 
   // Parallel workshares for the various parallel operations
+  hpctoolkit::util::ParallelForEach<std::reference_wrapper<const pms_profile_info_t>>
+      forEachProfileInfo;
   hpctoolkit::util::ParallelFor forProfilesParse;
   hpctoolkit::util::ResettableParallelFor forProfilesLoad;
   hpctoolkit::util::ResettableParallelForEach<std::pair<uint32_t, uint32_t>> forEachContextRange;

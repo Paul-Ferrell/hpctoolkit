@@ -65,6 +65,10 @@
 using namespace hpctoolkit;
 using namespace hpctoolkit::sinks;
 
+static uint64_t align(uint64_t v, uint8_t a) {
+  return (v + a - 1) / a * a;
+}
+
 static uint32_t readAsByte4(util::File::Instance& fh, uint64_t off) {
   uint32_t v = 0;
   int shift = 0, num_reads = 0;
@@ -302,7 +306,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   uint64_t profInfosSize = nProf * PMS_prof_info_SIZE;
 
   // Write out our part of the id tuples section, and figure out its final size
-  uint64_t idTuplesPtr = profInfosPtr + MULTIPLE_8(profInfosSize);
+  uint64_t idTuplesPtr = profInfosPtr + align(profInfosSize, 8);
   uint64_t idTuplesSize;
   {
     std::vector<char> buf;
@@ -310,11 +314,11 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
       // Rank 0 handles the summary profile('s id tuple)
       pms_id_t sumId = {
           .kind = IDTUPLE_SUMMARY,
-          .physical_index = IDTUPLE_SUMMARY_IDX,
-          .logical_index = IDTUPLE_SUMMARY_IDX,
+          .physical_index = 0,
+          .logical_index = 0,
       };
       id_tuple_t idt = {
-          .length = IDTUPLE_SUMMARY_LENGTH,
+          .length = 1,
           .ids = &sumId,
       };
 
@@ -373,7 +377,7 @@ void SparseDB::notifyWavefront(DataClass d) noexcept {
   }
 
   // Set up the double-buffered output for profile data
-  profDataOut.initialize(*pmf, idTuplesPtr + MULTIPLE_8(idTuplesSize));
+  profDataOut.initialize(*pmf, idTuplesPtr + align(idTuplesSize, 8));
 }
 
 void SparseDB::notifyThreadFinal(const PerThreadTemporary& tt) {
@@ -559,49 +563,6 @@ void SparseDB::write() {
   } catch (std::exception& e) { util::log::warning{} << "Error while writing out FORMATS.md file"; }
 }
 
-//***************************************************************************
-// profile.db  - YUMENG
-//
-/// EXAMPLE
-/// HPCPROF-tmsdb_____
-///[hdr:
-///   (version: 1.0)
-///   (num_prof: 73)
-///   (num_sec: 2)
-///   (prof_info_sec_size: 3796)
-///   (prof_info_sec_ptr: 128)
-///   (id_tuples_sec_size: 1596)
-///   (id_tuples_sec_ptr: 3928)
-///]
-///[Profile informations for 72 profiles
-///   0[(id_tuple_ptr: 3928) (metadata_ptr: 0) (spare_one: 0) (spare_two: 0) (num_vals: 182)
-///   (num_nzctxs: 120) (starting location: 70594))] 1[(id_tuple_ptr: 3940) (metadata_ptr: 0)
-///   (spare_one: 0) (spare_two: 0) (num_vals: 52) (num_nzctxs: 32) (starting location: 59170)]
-///   ...
-///]
-///[Id tuples for 121 profiles
-///   0[(SUMMARY: 0) ]
-///   1[(NODE: 713053824) (THREAD: 5) ]
-///   2[(NODE: 713053824) (THREAD: 53) ]
-///   ...
-///]
-///[thread 39
-///   [metrics:
-///   (NOTES: printed in file order, help checking if the file is correct)
-///     (value: 2.8167, metric id: 1)
-///     (value: 2.8167, metric id: 1)
-///     ...
-///   ]
-///   [ctx indices:
-///     (ctx id: 1, index: 0)
-///     (ctx id: 7, index: 1)
-///     ...
-///   ]
-///]
-///...
-/// PROFILEDB FOOTER CORRECT, FILE COMPLETE
-//***************************************************************************
-
 SparseDB::DoubleBufferedOutput::DoubleBufferedOutput() : pos(mpi::Tag::SparseDB_1) {}
 
 void SparseDB::DoubleBufferedOutput::initialize(util::File& outfile, uint64_t startOffset) {
@@ -661,38 +622,6 @@ void SparseDB::DoubleBufferedOutput::flush() {
   }
 }
 
-//***************************************************************************
-// cct.db
-//
-/// EXAMPLE
-/// HPCPROF-cmsdb___
-///[hdr:
-///   (version: 1.0)
-///   (num_ctx: 137)
-///   (num_sec: 1)
-///  (ctx_info_sec_size: 3014)
-///   (ctx_info_sec_ptr: 128)
-///]
-///[Context informations for 220 Contexts
-///   [(context id: 1) (num_vals: 72) (num_nzmids: 1) (starting location: 4844)]
-///   [(context id: 3) (num_vals: 0) (num_nzmids: 0) (starting location: 5728)]
-///   ...
-///]
-///[context 1
-///   [metrics easy grep version:
-///   (NOTES: printed in file order, help checking if the file is correct)
-///     (value: 2.64331, thread id: 0)
-///     (value: 2.62104, thread id: 1)
-///     ...
-///   ]
-///   [metric indices:
-///     (metric id: 1, index: 0)
-///     (metric id: END, index: 72)
-///   ]
-///]
-///...same [sparse metrics] for all rest ctxs
-/// CCTDB FOOTER CORRECT, FILE COMPLETE
-//***************************************************************************
 static std::vector<std::pair<uint32_t, uint64_t>>
 readProfileCtxPairs(const util::File& pmf, const pms_profile_info_t& pi) {
   if (pi.num_nzctxs == 0) {
@@ -752,7 +681,7 @@ void SparseDB::cctdbSetUp() {
   }
   std::exclusive_scan(
       ctxOffsets.begin(), ctxOffsets.end(), ctxOffsets.begin(),
-      mpi::World::rank() == 0 ? (MULTIPLE_8(ctxcnt * CMS_ctx_info_SIZE)) + CMS_hdr_SIZE : 0);
+      mpi::World::rank() == 0 ? align(ctxcnt * CMS_ctx_info_SIZE, 8) + CMS_hdr_SIZE : 0);
   ctxOffsets = mpi::allreduce(ctxOffsets, mpi::Op::sum());
 
   // Divide the contexts into groups of easily distributable sizes
