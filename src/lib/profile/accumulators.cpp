@@ -157,7 +157,7 @@ void StatisticAccumulator::Partial::validate() const noexcept {
 }
 
 util::optional_ref<const StatisticAccumulator> Metric::getFor(const Context& c) const noexcept {
-  return c.data().stats.find(*this);
+  return c.data().m_statistics.find(*this);
 }
 
 std::optional<double> MetricAccumulator::get(MetricScope s) const noexcept {
@@ -175,6 +175,27 @@ void MetricAccumulator::validate() const noexcept {
   assert(
       (point.load(std::memory_order_relaxed) != 0 || function != 0 || execution != 0)
       && "Attempt to access a MetricAccumulator with 0 value!");
+}
+
+MetricScopeSet MetricAccumulator::getNonZero() const noexcept {
+  MetricScopeSet out;
+  if (point.load(std::memory_order_relaxed) != 0)
+    out |= MetricScope::point;
+  if (function != 0)
+    out |= MetricScope::function;
+  if (execution != 0)
+    out |= MetricScope::execution;
+  return out;
+}
+
+StatisticAccumulator& PerContextAccumulators::statisticsFor(const Metric& m) noexcept {
+  return m_statistics
+      .emplace(std::piecewise_construct, std::forward_as_tuple(m), std::forward_as_tuple(m))
+      .first;
+}
+
+void PerContextAccumulators::markUsed(const Metric& m, MetricScopeSet ms) noexcept {
+  m_metricUsage[m] |= ms & m.scopes();
 }
 
 void PerThreadTemporary::finalize() noexcept {
@@ -395,9 +416,11 @@ void PerThreadTemporary::finalize() noexcept {
       }
     }
 
-    // Now that our bits are stable, accumulate back into the Statistics
-    auto& cdata = const_cast<Context&>(c).m_data.stats;
+    // Now that our bits are stable, accumulate back into the per-Context data
+    auto& cdata = const_cast<Context&>(c).m_data.m_statistics;
+    auto& musage = const_cast<Context&>(c).m_data.m_metricUsage;
     for (const auto& mx : data.citerate()) {
+      musage[mx.first] |= mx.second.getNonZero() & mx.first->scopes();
       auto& accum = cdata
                         .emplace(
                             std::piecewise_construct, std::forward_as_tuple(mx.first),
