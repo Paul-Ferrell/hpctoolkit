@@ -498,8 +498,6 @@ void SparseDB::write() {
       if (stats.size() > 0)
         addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
       for (const auto& mx : stats.citerate()) {
-        bool hasEx = false;
-        bool hasInc = false;
         const Metric& m = mx.first;
         if (!m.scopes().has(MetricScope::function) || !m.scopes().has(MetricScope::execution))
           util::log::fatal{} << "Metric isn't function/execution!";
@@ -508,24 +506,18 @@ void SparseDB::write() {
         for (const auto& sp : m.partials()) {
           if (auto vex = vv.get(sp).get(MetricScope::function)) {
             addMvPair(id.getFor(sp, MetricScope::function), *vex);
-            hasEx = true;
             // HACK conditional to work around experiment.xml. Line Scopes are
             // emitted as leaves (<S>), so they should have no extra inclusive cost.
-            if (c.scope().flat().type() == Scope::Type::line) {
+            if (c.scope().flat().type() == Scope::Type::line)
               addMvPair(id.getFor(sp, MetricScope::execution), *vex);
-              hasInc = true;
-            }
           }
           // HACK conditional to work around experiment.xml. Line Scopes are
           // emitted as leaves (<S>), so they should have no extra inclusive cost.
           if (c.scope().flat().type() != Scope::Type::line) {
-            if (auto vinc = vv.get(sp).get(MetricScope::execution)) {
+            if (auto vinc = vv.get(sp).get(MetricScope::execution))
               addMvPair(id.getFor(sp, MetricScope::execution), *vinc);
-              hasInc = true;
-            }
           }
         }
-        c.userdata[ud].nMetrics += (hasEx ? 1 : 0) + (hasInc ? 1 : 0);
       }
     }
 
@@ -729,11 +721,34 @@ void SparseDB::cctdbSetUp() {
   for (const Context& c : contexts) {
     const auto i = c.userdata[src.identifier()];
     assert(&c == &contexts[i].get());
-    const auto& udc = c.userdata[ud];
+    auto& udc = c.userdata[ud];
     ctxOffsets[i] = udc.nValues.load(std::memory_order_relaxed) * CMS_val_prof_idx_pair_SIZE;
-    // ????
-    if (mpi::World::rank() == 0 && c.userdata[ud].nMetrics > 0)
-      ctxOffsets[i] += (c.userdata[ud].nMetrics + 1) * CMS_m_pair_SIZE;
+
+    // Rank 0 has the final number of metric/idx pairs
+    if (mpi::World::rank() == 0) {
+      const auto& use = c.data().metricUsage();
+      auto iter = use.citerate();
+      bool isLine = c.scope().flat().type() == Scope::Type::line;
+      udc.nMetrics = std::accumulate(
+          iter.begin(), iter.end(), (uint16_t)0,
+          [isLine](uint16_t out, const auto& mu) -> uint16_t {
+            MetricScopeSet use = mu.second;
+            assert((mu.first->scopes() & use) == use && "Inconsistent Metric value usage data!");
+            // HACK conditional to work around experiment.xml. See above.
+            if (isLine) {
+              if (use.has(MetricScope::function))
+                out += 2;
+            } else {
+              if (use.has(MetricScope::function))
+                out++;
+              if (use.has(MetricScope::execution))
+                out++;
+            }
+            return out;
+          });
+      if (udc.nMetrics > 0)
+        ctxOffsets[i] += (udc.nMetrics + 1) * CMS_m_pair_SIZE;
+    }
   }
   std::exclusive_scan(
       ctxOffsets.begin(), ctxOffsets.end(), ctxOffsets.begin(),
