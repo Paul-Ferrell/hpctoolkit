@@ -117,7 +117,8 @@ MYSOURCES = \
 	formats/common.h \
 	formats/primitive.h formats/primitive.c \
 	formats/metadb.h formats/metadb.c \
-	formats/profiledb.h formats/profiledb.c
+	formats/profiledb.h formats/profiledb.c \
+	formats/cctdb.h formats/cctdb.c
 
 MYCFLAGS = @HOST_CFLAGS@ $(HPC_IFLAGS) $(MBEDTLS_IFLAGS)  -I$(LIBELF_INC)
 
