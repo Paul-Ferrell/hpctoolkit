@@ -814,10 +814,10 @@ Each Context-Major Sparse Value Block has the following structure:
  Hex | Type | Name          | Description
  ---:| ---- | ------------- | -------------------------------------------------
 `00:`|u64|`nValues`         | Number of non-zero values in this block
-`08:`|{Val}xN*(2)|`pValues` | Pointer to an array of `nValues` value pairs
+`08:`|{Val}xN*(4)|`pValues` | Pointer to an array of `nValues` value pairs
 `10:`|u16|`nMetrics`        | Number of non-empty metrics in this block
 |    |
-`18:`|{Idx}xN*(4)|`pMetricIndices`| Pointer to an array of `nMetrics` metric indices
+`18:`|{Idx}xN*(2)|`pMetricIndices`| Pointer to an array of `nMetrics` metric indices
 `20:`|| **END**
 
 {Val} above refers to the following structure:
