@@ -54,6 +54,8 @@
 #include "include/hpctoolkit-config.h"
 #include "lib/profile/mpi/all.hpp"
 
+#include "lib/prof-lean/hpcrun-fmt.h"
+
 #include <cassert>
 #include <getopt.h>
 #include <iostream>
