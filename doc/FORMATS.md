@@ -205,7 +205,7 @@ The Hierarchical Identifier Names section starts with the following header:
 `ppNames[kind]` is the human-readable name for the Identifier kind `kind`,
 where `kind` is part of a [Hierarchical Identifier Tuple][HIT].
 
-[HIT]: #hierarchical-identifier-tuple
+[HIT]: #profiledb-hierarchical-identifier-tuple-section
 
 Additional notes:
  - The strings pointed to `ppNames[...]` are fully contained within the
@@ -608,7 +608,7 @@ The Profile Info section starts with the following header:
 `20:`|[HIT]*(8)|`pIdTuple`| Identifier tuple for this application thread
 `28:`|| **END**
 
-[HIT]: #hierarchical-identifier-tuple
+[HIT]: #profiledb-hierarchical-identifier-tuple-section
 [PSVB]: #profile-major-sparse-value-block
 
 Additional notes:
@@ -695,7 +695,8 @@ each of the following structure:
  Hex | Type | Name | Description
  ---:| ---- | ---- | ----------------------------------------------------------
 `00:`|u16|`nIds`   | Number of identifications in this tuple
-`02:`|{Id}xN|`ids` | Array of `nIds` identifications for an application thread
+|    |
+`08:`|{Id}xN|`ids` | Array of `nIds` identifications for an application thread
 ` *:`|| **END**
 
 {Id} above refers to the following structure:
