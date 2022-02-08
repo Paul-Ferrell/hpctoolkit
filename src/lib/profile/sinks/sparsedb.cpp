@@ -757,14 +757,7 @@ void SparseDB::write() {
         [isLine](uint16_t out, const auto& mu) -> uint16_t {
           MetricScopeSet use = mu.second;
           assert((mu.first->scopes() & use) == use && "Inconsistent Metric value usage data!");
-          // HACK conditional to work around experiment.xml. See above.
-          if(isLine) {
-            if(use.has(MetricScope::function)) out += 2;
-          } else {
-            if(use.has(MetricScope::function)) out++;
-            if(use.has(MetricScope::execution)) out++;
-          }
-          return out;
+          return out + use.count();
         });
       if(udc.nMetrics > 0)
         ctxOffsets[i] += (udc.nMetrics + 1) * CMS_m_pair_SIZE;
@@ -853,23 +846,13 @@ void SparseDB::write() {
           addCiPair(c.userdata[src.identifier()], mvPairsBuf.size() / PMS_vm_pair_SIZE);
         for(const auto& mx: stats.citerate()) {
           const Metric& m = mx.first;
-          if(!m.scopes().has(MetricScope::function) || !m.scopes().has(MetricScope::execution))
-            util::log::fatal{} << "Metric isn't function/execution!";
           const auto& id = m.userdata[src.identifier()];
           const auto& vv = mx.second;
           for(const auto& sp: m.partials()) {
-            if(auto vex = vv.get(sp).get(MetricScope::function)) {
-              addMvPair(id.getFor(sp, MetricScope::function), *vex);
-              // HACK conditional to work around experiment.xml. Line Scopes are
-              // emitted as leaves (<S>), so they should have no extra inclusive cost.
-              if(c.scope().flat().type() == Scope::Type::line)
-                addMvPair(id.getFor(sp, MetricScope::execution), *vex);
-            }
-            // HACK conditional to work around experiment.xml. Line Scopes are
-            // emitted as leaves (<S>), so they should have no extra inclusive cost.
-            if(c.scope().flat().type() != Scope::Type::line) {
-              if(auto vinc = vv.get(sp).get(MetricScope::execution))
-                addMvPair(id.getFor(sp, MetricScope::execution), *vinc);
+            auto vvv = vv.get(sp);
+            for(MetricScope ms: m.scopes()) {
+              if(auto v = vvv.get(ms))
+                addMvPair(id.getFor(sp, ms), *v);
             }
           }
         }
