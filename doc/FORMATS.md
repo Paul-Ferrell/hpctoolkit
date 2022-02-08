@@ -597,8 +597,8 @@ The Profile Info section starts with the following header:
  ---:| ---- | ------------- | -------------------------------------------------
 `00:`|{PI}xN*(8)|`pProfiles`| Pointer to an array of `nProfiles` profile descriptions
 `08:`|u32|`nProfiles`       | Number of profiles listed in this section
-`0a:`|u8|`szProfile`        | Size of a {PI} structure, currently 16
-`0b:`|| **END**
+`0c:`|u8|`szProfile`        | Size of a {PI} structure, currently 40
+`0d:`|| **END**
 
 {PI} above refers to the following structure:
 
@@ -614,9 +614,10 @@ The Profile Info section starts with the following header:
 Additional notes:
  - The array pointed to by `pProfiles` is fully contained within the Profile
    Info section.
- - `pIdTuple` points within the [Identifier Tuple section](#profledb-hierarchical-identifier-tuple-section).
  - Profiles are unordered within this section, except the first which is
    classified as the "summary profile."
+ - `pIdTuple` points within the [Identifier Tuple section](#profledb-hierarchical-identifier-tuple-section),
+   except for the summary profile, where `pIdTuple` is 0.
  - The stride of `*pProfiles` is equal to `szProfile`, for forward compatibility
    this should always be read and used as the stride when accessing `*pProfiles`.
 
@@ -782,7 +783,7 @@ The Context Info section starts with the following header:
  ---:| ---- | --------- | -----------------------------------------------------
 `00:`|{CI}xN*(8)|`pCtxs`| Pointer to an array of `nCtxs` context descriptions
 `08:`|u32|`nCtxs`       | Number of contexts listed in this section
-`0c:`|u8|`szCtx`        | Size of a {CI} structure, currently 22
+`0c:`|u8|`szCtx`        | Size of a {CI} structure, currently 32
 `0d:`|| **END**
 
 {CI} above refers to the following structure:
@@ -886,7 +887,7 @@ The Trace Headers sections starts with the following structure:
  ---:| ---- | ----------- | ---------------------------------------------------
 `00:`|{TH}xN*(8)|`pTraces`| Pointer to an array of `nTraces` trace headers
 `08:`|u32|`nTraces`       | Number of traces listed in this section
-`0c:`|u8|`szTrace`        | Size of a {TH} structure, currently 22
+`0c:`|u8|`szTrace`        | Size of a {TH} structure, currently 24
 `0d:`|| **END**
 
 {TH} above refers to the following structure:
