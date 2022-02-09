@@ -762,8 +762,8 @@ The `cct.db` file starts with the following header:
 `00:`|u8x14|`magic`    | Format identifier, reads `HPCTOOLKITctxt` in ASCII
 `0e:`|u8|`majorVersion`| Major version number, currently 4
 `0f:`|u8|`minorVersion`| Minor version number, currently 0
-`10:`|u64|`szCtxInfo`  | Size of the [Context Info section][CIsec]
-`18:`|u8*(8)|`pCtxInfo`| Pointer to the [Context Info section][CIsec]
+`10:`|u64|`szCtxInfos`  | Size of the [Context Info section][CIsec]
+`18:`|u8*(8)|`pCtxInfos`| Pointer to the [Context Info section][CIsec]
 `20:`|| **END**
 
 [CIsec]: #cctdb-context-info-section
@@ -871,30 +871,34 @@ The `trace.db` file starts with the following header:
 `00:`|u8x14|`magic`    | Format identifer, reads `HPCTOOLKITtrce` in ASCII
 `0e:`|u8|`majorVersion`| Major version number, currently 4
 `0f:`|u8|`minorVersion`| Minor version number, currently 0
-`10:`|u64|`szHeaders`  | Size of the [Trace Headers section][THsec]
-`18:`|u8*(8)|`pHeaders`| Pointer to the [Trace Headers section][THsec]
+`10:`|u64|`szCtxTraces`  | Size of the [Context Trace Headers section][CTHsec]
+`18:`|u8*(8)|`pCtxTraces`| Pointer to the [Context Trace Headers section][CTHsec]
 `20:`|| **END**
 
-[THsec]: #tracedb-trace-headers-section
+[CTHsec]: #tracedb-context-trace-headers-section
 
+The `trace.db` file ends with an 8-byte footer, reading `trace.db` in ASCII.
 
-`trace.db` Trace Headers section
+`trace.db` Context Trace Headers section
 --------------------------------
 
-The Trace Headers sections starts with the following structure:
+The Context Trace Headers sections starts with the following structure:
 
- Hex | Type | Name        | Description
- ---:| ---- | ----------- | ---------------------------------------------------
-`00:`|{TH}xN*(8)|`pTraces`| Pointer to an array of `nTraces` trace headers
-`08:`|u32|`nTraces`       | Number of traces listed in this section
-`0c:`|u8|`szTrace`        | Size of a {TH} structure, currently 24
-`0d:`|| **END**
+ Hex | Type | Name         | Description
+ ---:| ---- | ------------ | ---------------------------------------------------
+`00:`|{CTH}xN*(8)|`pTraces`| Pointer to an array of `nTraces` trace headers
+`08:`|u32|`nTraces`        | Number of traces listed in this section
+`0c:`|u8|`szTrace`         | Size of a {TH} structure, currently 24
+|    |
+`10:`|u64|`minTimestamp`   | Smallest timestamp of the traces listed in `*pTraces`
+`18:`|u64|`maxTimestamp`   | Largest timestamp of the traces listed in `*pTraces`
+`20:`|| **END**
 
-{TH} above refers to the following structure:
+{CTH} above refers to the following structure:
 
  Hex | Type | Name       | Description
  ---:| ---- | ---------- | ----------------------------------------------------
-`00:`|u32|`profIdx`      | Index of a profile listed in the [`profile.db`](#profiledb-profile-info-section)
+`00:`|u32|`profIndex`    | Index of a profile listed in the [`profile.db`](#profiledb-profile-info-section)
 |    |
 `08:`|{Elem}*(8)|`pStart`| Pointer to the first element of the trace line (array)
 `10:`|{Elem}*(4)|`pEnd`  | Pointer to the after-end element of the trace line (array)
@@ -909,9 +913,9 @@ The Trace Headers sections starts with the following structure:
 `0c:`|| **END**
 
 Additional notes:
- - The array pointed to by `pTraces` is completely within the Trace Headers
-   section. The pointers `pStart` and `pEnd` point outside any of the sections
-   listed in the [`trace.db` header](#tracedb-version-40).
+ - The array pointed to by `pTraces` is completely within the Context Trace
+   Headers section. The pointers `pStart` and `pEnd` point outside any of the
+   sections listed in the [`trace.db` header](#tracedb-version-40).
  - The array starting at `pStart` and ending just before `pEnd` is sorted in
    order of increasing `timestamp`.
  - The stride of `*pTraces` is `szTrace`, for forward compatibility this value
