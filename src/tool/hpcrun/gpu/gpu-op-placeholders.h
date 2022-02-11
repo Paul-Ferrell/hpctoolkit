@@ -60,6 +60,7 @@
 
 #include <hpcrun/utilities/ip-normalized.h>
 #include <hpcrun/hpcrun-placeholders.h>
+#include <hpcrun/cct/cct.h>
 
 
 
