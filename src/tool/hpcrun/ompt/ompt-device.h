@@ -47,70 +47,38 @@
 #ifndef __OMPT_DEVICE_H__
 #define __OMPT_DEVICE_H__
 
-#include <stdbool.h>
-#include <include/hpctoolkit-config.h>
+#include "include/hpctoolkit-config.h"
+
 #include <cct/cct.h>
+#include <stdbool.h>
 
-#if HAVE_CUPTI_H 
+#if HAVE_CUPTI_H
 
-void 
-prepare_device
-(
- void
-);
-
+void prepare_device(void);
 
 //---------------------------------------------
 // If a API is invoked by OMPT (TRUE/FALSE)
 //---------------------------------------------
 
-bool
-ompt_runtime_status_get
-(
- void
-);
+bool ompt_runtime_status_get(void);
 
-
-cct_node_t *
-ompt_trace_node_get
-(
- void
-);
-
+cct_node_t* ompt_trace_node_get(void);
 
 //-----------------------------------------------------------------------------
 // NVIDIA GPU pc sampling support
 //-----------------------------------------------------------------------------
 
-void 
-ompt_pc_sampling_enable
-(
- void 
-);
+void ompt_pc_sampling_enable(void);
 
-
-void 
-ompt_pc_sampling_disable
-(
- void
-);
+void ompt_pc_sampling_disable(void);
 
 //-----------------------------------------------------------------------------
 // Use hpctoolkit callback/OMPT callback
 //-----------------------------------------------------------------------------
 
-void
-ompt_external_subscriber_enable
-(
- void
-);
+void ompt_external_subscriber_enable(void);
 
-
-void
-ompt_external_subscriber_disable
-(
- void
-);
+void ompt_external_subscriber_disable(void);
 
 #else
 
@@ -119,5 +87,4 @@ ompt_external_subscriber_disable
 
 #endif
 
-
-#endif // _OMPT_INTERFACE_H_
+#endif  // _OMPT_INTERFACE_H_

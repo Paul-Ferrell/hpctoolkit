@@ -44,38 +44,14 @@
 #ifndef rocm_debug_api_h
 #define rocm_debug_api_h
 
-//******************************************************************************
-// interface operations
-//******************************************************************************
+int rocm_debug_api_bind(void);
 
-int
-rocm_debug_api_bind
-(
-  void
-);
+void rocm_debug_api_init(void);
 
-void
-rocm_debug_api_init
-(
-  void
-);
+void rocm_debug_api_fini(void);
 
-void
-rocm_debug_api_fini
-(
-  void
-);
+void rocm_debug_api_query_code_object(size_t* code_obejct_count_ptr);
 
-void
-rocm_debug_api_query_code_object
-(
-  size_t* code_obejct_count_ptr
-);
-
-char*
-rocm_debug_api_query_uri
-(
-  size_t code_object_index
-);
+char* rocm_debug_api_query_uri(size_t code_object_index);
 
 #endif

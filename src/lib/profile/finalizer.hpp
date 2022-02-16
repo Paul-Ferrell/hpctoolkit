@@ -47,12 +47,11 @@
 #ifndef HPCTOOLKIT_PROFILE_FINALIZER_H
 #define HPCTOOLKIT_PROFILE_FINALIZER_H
 
-#include "pipeline.hpp"
 #include "dataclass.hpp"
-
+#include "pipeline.hpp"
+#include "stdshim/filesystem.hpp"
 #include "util/ref_wrappers.hpp"
 
-#include "stdshim/filesystem.hpp"
 #include <atomic>
 #include <optional>
 
@@ -123,7 +122,6 @@ protected:
 
   ProfilePipeline::Source sink;
 };
-
-}
+}  // namespace hpctoolkit
 
 #endif  // HPCTOOLKIT_PROFILE_FINALIZER_H

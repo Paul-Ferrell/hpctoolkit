@@ -44,18 +44,9 @@
 #ifndef gpu_binary_h
 #define gpu_binary_h
 
+#define GPU_BINARY_NAME "gpubin"
 
-
-//*****************************************************************************
-// macros
-//*****************************************************************************
-
-#define GPU_BINARY_NAME           "gpubin"
-
-#define GPU_BINARY_SUFFIX         "." GPU_BINARY_NAME 
-#define GPU_BINARY_DIRECTORY      GPU_BINARY_NAME "s"
-
-
+#define GPU_BINARY_SUFFIX    "." GPU_BINARY_NAME
+#define GPU_BINARY_DIRECTORY GPU_BINARY_NAME "s"
 
 #endif
-

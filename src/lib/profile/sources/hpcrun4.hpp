@@ -48,9 +48,9 @@
 #define HPCTOOLKIT_PROFILE_SOURCES_HPCRUN4_H
 
 #include "../source.hpp"
+#include "../stdshim/filesystem.hpp"
 
 #include <memory>
-#include "../stdshim/filesystem.hpp"
 
 // Forward declaration of a structure.
 extern "C" typedef struct hpcrun_sparse_file hpcrun_sparse_file_t;
@@ -100,25 +100,29 @@ private:
   std::unordered_map<unsigned int, Module&> modules;
 
   // ID to Context-like mapping.
-  std::unordered_map<unsigned int, std::variant<
-      // Simple single Context. First term is the parent, second is the Context.
-      std::pair<Context*, Context*>,
-      // Inlined Reconstruction (eg. GPU PC sampling in serialized mode).
-      ContextReconstruction*,
-      // Reference to an outlined range tree, GPU context node. Has no metrics.
-      // First Context is the root, second is the entry-Context.
-      std::pair<const std::pair<Context*, Context*>*, PerThreadTemporary*>,
-      // Reference to an outlined range tree, range node. Has kernel metrics.
-      std::pair<const std::pair<const std::pair<Context*, Context*>*, PerThreadTemporary*>*, uint64_t /* group id */>,
-      // Outlined range tree root. Has no metrics, never actually represented.
-      int,
-      // Outlined range tree, GPU context node. Has no metrics.
-      PerThreadTemporary*,
-      // Outlined range tree, range node. Has no metrics.
-      std::pair<PerThreadTemporary*, uint64_t>,
-      // Outlined range tree, sample node. Has instruction-level metrics.
-      std::pair<const std::pair<PerThreadTemporary*, uint64_t>*, ContextFlowGraph*>
-    >> nodes;
+  std::unordered_map<
+      unsigned int,
+      std::variant<
+          // Simple single Context. First term is the parent, second is the Context.
+          std::pair<Context*, Context*>,
+          // Inlined Reconstruction (eg. GPU PC sampling in serialized mode).
+          ContextReconstruction*,
+          // Reference to an outlined range tree, GPU context node. Has no metrics.
+          // First Context is the root, second is the entry-Context.
+          std::pair<const std::pair<Context*, Context*>*, PerThreadTemporary*>,
+          // Reference to an outlined range tree, range node. Has kernel metrics.
+          std::pair<
+              const std::pair<const std::pair<Context*, Context*>*, PerThreadTemporary*>*,
+              uint64_t /* group id */>,
+          // Outlined range tree root. Has no metrics, never actually represented.
+          int,
+          // Outlined range tree, GPU context node. Has no metrics.
+          PerThreadTemporary*,
+          // Outlined range tree, range node. Has no metrics.
+          std::pair<PerThreadTemporary*, uint64_t>,
+          // Outlined range tree, sample node. Has instruction-level metrics.
+          std::pair<const std::pair<PerThreadTemporary*, uint64_t>*, ContextFlowGraph*>>>
+      nodes;
 
   // Path to the tracefile, and offset of the actual data blob.
   stdshim::filesystem::path tracepath;
@@ -129,7 +133,6 @@ private:
   friend std::unique_ptr<ProfileSource> ProfileSource::create_for(const stdshim::filesystem::path&);
   Hpcrun4(const stdshim::filesystem::path&);
 };
-
-}
+}  // namespace hpctoolkit::sources
 
 #endif  // HPCTOOLKIT_PROFILE_SOURCES_HPCRUN4_H

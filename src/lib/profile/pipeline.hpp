@@ -53,15 +53,14 @@
 #include "lexical.hpp"
 #include "metric.hpp"
 #include "module.hpp"
-
 #include "util/locked_unordered.hpp"
 #include "util/once.hpp"
 
-#include <map>
 #include <bitset>
-#include <optional>
-#include <memory>
 #include <chrono>
+#include <map>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace hpctoolkit {
@@ -104,10 +103,10 @@ protected:
   // All the Sinks, with notes on which callbacks they should be triggered for.
   struct SinkEntry {
     SinkEntry(DataClass d, DataClass w, ExtensionClass e, ProfileSink& s)
-      : dataLimit(d), waveLimit(w), extensionLimit(e), sink(s) {};
+        : dataLimit(d), waveLimit(w), extensionLimit(e), sink(s){};
     SinkEntry(SinkEntry&& o)
-      : dataLimit(o.dataLimit), waveLimit(o.waveLimit),
-        extensionLimit(o.extensionLimit), sink(o.sink) {};
+        : dataLimit(o.dataLimit), waveLimit(o.waveLimit), extensionLimit(o.extensionLimit),
+          sink(o.sink){};
 
     DataClass dataLimit;
     DataClass waveLimit;
@@ -143,7 +142,6 @@ protected:
   std::vector<std::unique_ptr<ProfileSink>> up_sinks;
   std::vector<std::unique_ptr<ProfileFinalizer>> up_finalizers;
 };
-
 }  // namespace detail
 
 /// Monolithic Pipeline for processing Profile data. Effectively connects
@@ -345,8 +343,7 @@ public:
     ///
     /// DataClass: `contexts`
     // MT: Externally Synchronized (this), Internally Synchronized
-    ContextReconstruction& contextReconstruction(ContextFlowGraph& graph,
-                                                 Context& root);
+    ContextReconstruction& contextReconstruction(ContextFlowGraph& graph, Context& root);
 
     /// Emit a ContextFlowGraph, generated statically from the given Scope.
     ///
@@ -417,21 +414,23 @@ public:
   private:
     // Helper template to merge common code for all timepoint types
     template<class Tp, class Rw, class Nt, class Sg>
-    [[nodiscard]] TimepointStatus timepoint(PerThreadTemporary&,
-        PerThreadTemporary::TimepointsData<Tp>&, Tp, Sg, const Rw&, const Nt&);
+    [[nodiscard]] TimepointStatus timepoint(
+        PerThreadTemporary&, PerThreadTemporary::TimepointsData<Tp>&, Tp, Sg, const Rw&, const Nt&);
 
   public:
     /// Emit a Context-type timepoint into the Pipeline.
     /// Returns the expected next timepoint the caller should inject.
     /// DataClass: `ctxTimepoints`
     // MT: Externally Synchronized (this), Internally Synchronized
-    [[nodiscard]] TimepointStatus timepoint(PerThreadTemporary&, Context&, std::chrono::nanoseconds);
+    [[nodiscard]] TimepointStatus
+    timepoint(PerThreadTemporary&, Context&, std::chrono::nanoseconds);
 
     /// Emit a Metric-value timepoint into the Pipeline.
     /// Returns the expected next timepoint the caller should inject.
     /// DataClass: `metricTimepoints`
     // MT: Externally Synchronized (this), Internally Synchronized
-    [[nodiscard]] TimepointStatus timepoint(PerThreadTemporary&, Metric&, double, std::chrono::nanoseconds);
+    [[nodiscard]] TimepointStatus
+    timepoint(PerThreadTemporary&, Metric&, double, std::chrono::nanoseconds);
 
     /// Reference to the Thread-local metric data for a particular Context.
     /// Allows for efficient emmission of multiple Metrics' data to one location.
@@ -446,7 +445,7 @@ public:
     private:
       friend class ProfilePipeline::Source;
       decltype(PerThreadTemporary::c_data)::mapped_type& map;
-      explicit AccumulatorsRef(decltype(map)& m) : map(m) {};
+      explicit AccumulatorsRef(decltype(map)& m) : map(m){};
     };
 
     /// Attribute metric values to the given Thread and Context, by proxy
@@ -473,8 +472,7 @@ public:
     /// Reconstruction group.
     /// DataClass: `metrics`
     // MT: Externally Synchronized (this), Internally Synchronized
-    AccumulatorsRef accumulateTo(PerThreadTemporary&, uint64_t group,
-                                 ContextFlowGraph&);
+    AccumulatorsRef accumulateTo(PerThreadTemporary&, uint64_t group, ContextFlowGraph&);
 
     /// Reference to the Statistic data for a particular Context.
     /// Allows for efficient emmission of multiple Statistics' data to one location.
@@ -489,7 +487,7 @@ public:
     private:
       friend class ProfilePipeline::Source;
       Context& ctx;
-      explicit StatisticsRef(Context& ctx) : ctx(ctx) {};
+      explicit StatisticsRef(Context& ctx) : ctx(ctx){};
     };
 
     /// Obtain a StatisticsRef for the given Context.
@@ -538,8 +536,7 @@ public:
     /// Access to the canonical copies of the data within the Pipeline. Can only
     /// be used after the write() barrier.
     const ProfileAttributes& attributes();
-    std::optional<std::pair<std::chrono::nanoseconds, std::chrono::nanoseconds>>
-      timepointBounds();
+    std::optional<std::pair<std::chrono::nanoseconds, std::chrono::nanoseconds>> timepointBounds();
     const util::locked_unordered_uniqued_set<Module>& modules();
     const util::locked_unordered_uniqued_set<File>& files();
     const util::locked_unordered_uniqued_set<Metric>& metrics();
@@ -572,7 +569,10 @@ public:
 private:
   // Finalize the data in a PerThreadTemporary, and commit it to the Sinks
   // MT: Externally Synchronized (tt, localTimepointBounds), Internally Synchronized (this)
-  void complete(PerThreadTemporary&& tt, std::optional<std::pair<std::chrono::nanoseconds, std::chrono::nanoseconds>>& localTimepointBounds);
+  void complete(
+      PerThreadTemporary&& tt,
+      std::optional<std::pair<std::chrono::nanoseconds, std::chrono::nanoseconds>>&
+          localTimepointBounds);
 
   // Scheduled data transfer. Minimal requested and available set.
   DataClass scheduled;
@@ -586,7 +586,7 @@ private:
   // Atomic counters for the early wavefronts.
   struct Waves {
     Waves() = delete;
-    Waves(std::size_t i) : attributes(i), references(i), contexts(i) {};
+    Waves(std::size_t i) : attributes(i), references(i), contexts(i){};
     std::atomic<std::size_t> attributes;
     std::atomic<std::size_t> references;
     std::atomic<std::size_t> contexts;
@@ -614,8 +614,7 @@ private:
   // reference counts is a downright pain.
   std::mutex attrsLock;
   ProfileAttributes attrs;
-  std::optional<std::pair<std::chrono::nanoseconds, std::chrono::nanoseconds>>
-    timepointBounds;
+  std::optional<std::pair<std::chrono::nanoseconds, std::chrono::nanoseconds>> timepointBounds;
   util::locked_unordered_set<std::unique_ptr<Thread>> threads;
   util::locked_unordered_uniqued_set<Module> mods;
   util::locked_unordered_uniqued_set<File> files;
@@ -633,10 +632,9 @@ private:
     bool operator()(const std::vector<pms_id_t>&, const std::vector<pms_id_t>&) const noexcept;
   };
   std::shared_mutex mergedThreadsLock;
-  std::unordered_map<std::vector<pms_id_t>, PerThreadTemporary,
-                     TupleHash, TupleEqual> mergedThreads;
+  std::unordered_map<std::vector<pms_id_t>, PerThreadTemporary, TupleHash, TupleEqual>
+      mergedThreads;
 };
-
-}
+}  // namespace hpctoolkit
 
 #endif  // HPCTOOLKIT_PROFILE_PIPELINE_H

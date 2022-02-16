@@ -48,7 +48,6 @@
 #define HPCTOOLKIT_PROFILE_FINALIZERS_STRUCT_H
 
 #include "../finalizer.hpp"
-
 #include "../util/range_map.hpp"
 
 #include <deque>
@@ -67,9 +66,7 @@ public:
   ~StructFile();
 
   void notifyPipeline() noexcept override;
-  ExtensionClass provides() const noexcept override {
-    return ExtensionClass::classification;
-  }
+  ExtensionClass provides() const noexcept override { return ExtensionClass::classification; }
   ExtensionClass requires() const noexcept override { return {}; }
 
   util::optional_ref<Context> classify(Context&, NestedScope&) noexcept override;
@@ -85,7 +82,8 @@ private:
     // Trie of Scopes, for efficiently storing nested Scopes
     std::deque<trienode> trie;
     // Bounds-map (instruction -> nested Scope and function entry)
-    std::map<util::interval<uint64_t>, std::pair<std::reference_wrapper<const trienode>, uint64_t>> leaves;
+    std::map<util::interval<uint64_t>, std::pair<std::reference_wrapper<const trienode>, uint64_t>>
+        leaves;
     // Reversed call graph (callee function entry -> caller instruction)
     std::unordered_multimap<uint64_t, uint64_t> rcg;
   };
@@ -97,10 +95,10 @@ private:
 
   // Structfiles can have data on multiple load modules (LM tags), this maps
   // each binary path with the properly initialized Parser for that tag.
-  std::unordered_map<stdshim::filesystem::path,
-                     std::unique_ptr<finalizers::detail::StructFileParser>> lms;
+  std::unordered_map<
+      stdshim::filesystem::path, std::unique_ptr<finalizers::detail::StructFileParser>>
+      lms;
 };
-
-}
+}  // namespace hpctoolkit::finalizers
 
 #endif  // HPCTOOLKIT_PROFILE_FINALIZERS_STRUCT_H

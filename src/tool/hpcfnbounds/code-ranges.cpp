@@ -44,57 +44,37 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-#include <map>
-using namespace std;
-
 #include "code-ranges.h"
+
 #include "process-ranges.h"
 
+#include <map>
 
-/******************************************************************************
- * forward declarations 
- *****************************************************************************/
-
-
-/******************************************************************************
- * types
- *****************************************************************************/
+using namespace std;
 
 class CodeRange {
 public:
-  CodeRange(const char *_name, void *_start, void *_end, long _offset, 
-            DiscoverFnTy discover);
+  CodeRange(const char* _name, void* _start, void* _end, long _offset, DiscoverFnTy discover);
   void Process();
-  bool Contains(void *addr);
+  bool Contains(void* addr);
   DiscoverFnTy Discover() { return discover; }
-  void *Relocate(void *addr); 
+  void* Relocate(void* addr);
   long Offset() { return offset; }
+
 private:
-  const char *name;
-  void *start;
-  void *end;
+  const char* name;
+  void* start;
+  void* end;
   long offset;
   DiscoverFnTy discover;
 };
 
-typedef map<void*,CodeRange*> CodeRangeSet;
-
-
-/******************************************************************************
- * local variables 
- *****************************************************************************/
+typedef map<void*, CodeRange*> CodeRangeSet;
 
 static CodeRangeSet code_ranges;
 
-
-/******************************************************************************
- * interface operations 
- *****************************************************************************/
-
 // Free both the code_ranges map and the CodeRange objects in the map.
-void
-code_ranges_reinit(void)
-{
+void code_ranges_reinit(void) {
   CodeRangeSet::iterator it;
 
   for (it = code_ranges.begin(); it != code_ranges.end(); it++) {
@@ -103,85 +83,64 @@ code_ranges_reinit(void)
   code_ranges.clear();
 }
 
-
-long
-offset_for_fn(void *addr)
-{
+long offset_for_fn(void* addr) {
   CodeRangeSet::iterator it = code_ranges.lower_bound(addr);
 
-  if (it != code_ranges.begin()) { 
+  if (it != code_ranges.begin()) {
     if (--it != code_ranges.begin()) {
-      CodeRange *r = (*it).second;
-      if (r->Contains(addr)) return r->Offset();
+      CodeRange* r = (*it).second;
+      if (r->Contains(addr))
+        return r->Offset();
     }
   }
-  return 0L; //should never get here
-} 
-
-
-bool 
-consider_possible_fn_address(void *addr)
-{
-  CodeRangeSet::iterator it = code_ranges.lower_bound(addr);
-
-  if (it == code_ranges.begin() || it == code_ranges.end()) return false;
-  if (--it == code_ranges.begin()) return false;
-
-  CodeRange *r = (*it).second;
-  return r->Contains(addr) & r->Discover();
-} 
-
-
-void 
-new_code_range(const char *sname, void *start, void *end, long offset, DiscoverFnTy discover)
-{
-  // FIXME: this leaks memory in the case that the map already
-  // contains an entry with the same start address.
-  code_ranges.insert(pair<void*,CodeRange*>
-		     (start, new CodeRange(sname, start, end, offset, discover)));
+  return 0L;  // should never get here
 }
 
+bool consider_possible_fn_address(void* addr) {
+  CodeRangeSet::iterator it = code_ranges.lower_bound(addr);
 
-void 
-process_code_ranges()
-{
+  if (it == code_ranges.begin() || it == code_ranges.end())
+    return false;
+  if (--it == code_ranges.begin())
+    return false;
+
+  CodeRange* r = (*it).second;
+  return r->Contains(addr) & r->Discover();
+}
+
+void new_code_range(const char* sname, void* start, void* end, long offset, DiscoverFnTy discover) {
+  // FIXME: this leaks memory in the case that the map already
+  // contains an entry with the same start address.
+  code_ranges.insert(
+      pair<void*, CodeRange*>(start, new CodeRange(sname, start, end, offset, discover)));
+}
+
+void process_code_ranges() {
   process_range_init();
   CodeRangeSet::iterator it = code_ranges.begin();
   for (; it != code_ranges.end(); it++) {
-    CodeRange *r = (*it).second;
+    CodeRange* r = (*it).second;
     r->Process();
   }
 }
 
-
-/******************************************************************************
- * private operations 
- *****************************************************************************/
-
-CodeRange::CodeRange(const char *sname, void *_start, void *_end, long _offset,
-		     DiscoverFnTy _discover) 
-{
+CodeRange::CodeRange(
+    const char* sname, void* _start, void* _end, long _offset, DiscoverFnTy _discover) {
   name = sname;
   start = _start;
-  end = _end; 
+  end = _end;
   offset = _offset;
   discover = _discover;
 }
 
-void * 
-CodeRange::Relocate(void *addr)
-{ 
-  return (void *)(offset + (char *) addr); 
+void* CodeRange::Relocate(void* addr) {
+  return (void*)(offset + (char*)addr);
 }
 
-bool 
-CodeRange::Contains(void *addr)
-{
+bool CodeRange::Contains(void* addr) {
   return (addr >= start) && (addr < end);
 }
 
-void 
-CodeRange::Process()
-{
+void CodeRange::Process() {
   process_range(name, -offset, Relocate(start), Relocate(end), discover);
 }

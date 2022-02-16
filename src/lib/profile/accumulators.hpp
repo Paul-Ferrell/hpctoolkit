@@ -48,7 +48,6 @@
 #define HPCTOOLKIT_PROFILE_ACCUMULATORS_H
 
 #include "scope.hpp"
-
 #include "util/locked_unordered.hpp"
 #include "util/streaming_sort.hpp"
 
@@ -96,31 +95,43 @@ const std::string& stringify(MetricScope);
 class MetricScopeSet final : private std::bitset<3> {
 private:
   using base = std::bitset<3>;
-  MetricScopeSet(const base& b) : base(b) {};
+  MetricScopeSet(const base& b) : base(b){};
+
 public:
   MetricScopeSet() = default;
-  MetricScopeSet(MetricScope s) : base(1<<static_cast<size_t>(s)) {};
+  MetricScopeSet(MetricScope s) : base(1 << static_cast<size_t>(s)){};
   MetricScopeSet(std::initializer_list<MetricScope> l) : base(0) {
-    for(const auto s: l) base::set(static_cast<size_t>(s));
+    for (const auto s : l)
+      base::set(static_cast<size_t>(s));
   }
 
-  static inline constexpr struct all_t {} all = {};
+  static inline constexpr struct all_t {
+  } all = {};
   MetricScopeSet(all_t) : base(0) { base::set(); }
 
   bool has(MetricScope s) const noexcept { return base::operator[](static_cast<size_t>(s)); }
 
-  MetricScopeSet operator|(const MetricScopeSet& o) { return (base)*this | (base)o; }
-  MetricScopeSet operator+(const MetricScopeSet& o) { return (base)*this | (base)o; }
-  MetricScopeSet operator&(const MetricScopeSet& o) { return (base)*this & (base)o; }
-  MetricScopeSet& operator|=(const MetricScopeSet& o) { base::operator|=(o); return *this; }
-  MetricScopeSet& operator+=(const MetricScopeSet& o) { base::operator|=(o); return *this; }
-  MetricScopeSet& operator&=(const MetricScopeSet& o) { base::operator&=(o); return *this; }
+  MetricScopeSet operator|(const MetricScopeSet& o) { return (base) * this | (base)o; }
+  MetricScopeSet operator+(const MetricScopeSet& o) { return (base) * this | (base)o; }
+  MetricScopeSet operator&(const MetricScopeSet& o) { return (base) * this & (base)o; }
+  MetricScopeSet& operator|=(const MetricScopeSet& o) {
+    base::operator|=(o);
+    return *this;
+  }
+  MetricScopeSet& operator+=(const MetricScopeSet& o) {
+    base::operator|=(o);
+    return *this;
+  }
+  MetricScopeSet& operator&=(const MetricScopeSet& o) {
+    base::operator&=(o);
+    return *this;
+  }
 
   using base::count;
 
   class const_iterator final {
   public:
-    const_iterator() {};
+    const_iterator(){};
 
     const_iterator(const const_iterator&) = default;
     const_iterator& operator=(const const_iterator&) = default;
@@ -136,10 +147,12 @@ public:
     const_iterator& operator++() {
       assert(set != nullptr);
       size_t ms = static_cast<size_t>(scope);
-      for(++ms; ms < set->size() && !set->has(static_cast<MetricScope>(ms));
-          ++ms);
-      if(ms >= set->size()) set = nullptr;
-      else scope = static_cast<MetricScope>(ms);
+      for (++ms; ms < set->size() && !set->has(static_cast<MetricScope>(ms)); ++ms)
+        ;
+      if (ms >= set->size())
+        set = nullptr;
+      else
+        scope = static_cast<MetricScope>(ms);
       return *this;
     }
     const_iterator operator++(int) {
@@ -158,7 +171,8 @@ public:
     const_iterator it;
     it.set = this;
     it.scope = static_cast<MetricScope>(0);
-    if(!operator[](0)) ++it;
+    if (!operator[](0))
+      ++it;
     return it;
   }
   const_iterator end() const { return {}; }
@@ -167,7 +181,7 @@ public:
 /// Accumulator structure for the data implicitly bound to a Thread and Context.
 class MetricAccumulator final {
 public:
-  MetricAccumulator() : point(0), function(0), execution(0) {};
+  MetricAccumulator() : point(0), function(0), execution(0){};
 
   MetricAccumulator(const MetricAccumulator&) = delete;
   MetricAccumulator& operator=(const MetricAccumulator&) = delete;
@@ -209,9 +223,7 @@ public:
   /// Reference to the Metric data for a particular Context in this Thread.
   /// Returns `std::nullopt` if none is present.
   // MT: Safe (const), Unstable (before notifyThreadFinal)
-  auto accumulatorsFor(const Context& c) const noexcept {
-    return c_data.find(c);
-  }
+  auto accumulatorsFor(const Context& c) const noexcept { return c_data.find(c); }
 
   /// Reference to all of the Metric data on Thread.
   // MT: Safe (const), Unstable (before notifyThreadFinal)
@@ -221,7 +233,7 @@ private:
   Thread& m_thread;
 
   friend class ProfilePipeline;
-  PerThreadTemporary(Thread& t) : m_thread(t) {};
+  PerThreadTemporary(Thread& t) : m_thread(t){};
 
   // Finalize the MetricAccumulators for a Thread.
   // MT: Internally Synchronized
@@ -230,38 +242,43 @@ private:
   // Bits needed for handling timepoints
   std::chrono::nanoseconds minTime = std::chrono::nanoseconds::max();
   std::chrono::nanoseconds maxTime = std::chrono::nanoseconds::min();
-  template<class Tp>
-  struct TimepointsData {
+  template<class Tp> struct TimepointsData {
     bool unboundedDisorder = false;
     util::bounded_streaming_sort_buffer<Tp, util::compare_only_first<Tp>> sortBuf;
     std::vector<Tp> staging;
   };
-  TimepointsData<std::pair<std::chrono::nanoseconds,
-    std::reference_wrapper<const Context>>> ctxTpData;
-  util::locked_unordered_map<util::reference_index<const Metric>,
-    TimepointsData<std::pair<std::chrono::nanoseconds, double>>> metricTpData;
+  TimepointsData<std::pair<std::chrono::nanoseconds, std::reference_wrapper<const Context>>>
+      ctxTpData;
+  util::locked_unordered_map<
+      util::reference_index<const Metric>,
+      TimepointsData<std::pair<std::chrono::nanoseconds, double>>>
+      metricTpData;
 
   friend class Metric;
-  util::locked_unordered_map<util::reference_index<const Context>,
-    util::locked_unordered_map<util::reference_index<const Metric>,
-      MetricAccumulator>> c_data;
-  util::locked_unordered_map<util::reference_index<const ContextReconstruction>,
-    util::locked_unordered_map<util::reference_index<const Metric>,
-      MetricAccumulator>> r_data;
+  util::locked_unordered_map<
+      util::reference_index<const Context>,
+      util::locked_unordered_map<util::reference_index<const Metric>, MetricAccumulator>>
+      c_data;
+  util::locked_unordered_map<
+      util::reference_index<const ContextReconstruction>,
+      util::locked_unordered_map<util::reference_index<const Metric>, MetricAccumulator>>
+      r_data;
 
   struct RGroup {
-    util::locked_unordered_map<util::reference_index<const Context>,
-      util::locked_unordered_map<util::reference_index<const Metric>,
-        MetricAccumulator>> c_data;
-    util::locked_unordered_map<util::reference_index<const ContextFlowGraph>,
-      util::locked_unordered_map<util::reference_index<const Metric>,
-        MetricAccumulator>> fg_data;
+    util::locked_unordered_map<
+        util::reference_index<const Context>,
+        util::locked_unordered_map<util::reference_index<const Metric>, MetricAccumulator>>
+        c_data;
+    util::locked_unordered_map<
+        util::reference_index<const ContextFlowGraph>,
+        util::locked_unordered_map<util::reference_index<const Metric>, MetricAccumulator>>
+        fg_data;
 
     std::mutex lock;
-    std::unordered_map<Scope,
-      std::unordered_set<util::reference_index<Context>>> c_entries;
-    std::unordered_map<util::reference_index<ContextFlowGraph>,
-      std::unordered_set<util::reference_index<const ContextReconstruction>>>
+    std::unordered_map<Scope, std::unordered_set<util::reference_index<Context>>> c_entries;
+    std::unordered_map<
+        util::reference_index<ContextFlowGraph>,
+        std::unordered_set<util::reference_index<const ContextReconstruction>>>
         fg_reconsts;
   };
   util::locked_unordered_map<uint64_t, RGroup> r_groups;
@@ -274,12 +291,13 @@ private:
   /// bound implicitly to a particular Statistic::Partial.
   class Partial final {
   public:
-    Partial() : point(0), function(0), execution(0) {};
+    Partial() : point(0), function(0), execution(0){};
 
     Partial(const Partial&) = delete;
     Partial& operator=(const Partial&) = delete;
     Partial(Partial&&) = default;
     Partial& operator=(Partial&&) = delete;
+
   private:
     void validate() const noexcept;
 
@@ -309,8 +327,7 @@ public:
 
   private:
     friend class StatisticAccumulator;
-    PartialRef(Partial& p, const StatisticPartial& sp)
-      : partial(p), statpart(sp) {};
+    PartialRef(Partial& p, const StatisticPartial& sp) : partial(p), statpart(sp){};
 
     Partial& partial;
     const StatisticPartial& statpart;
@@ -330,8 +347,7 @@ public:
 
   private:
     friend class StatisticAccumulator;
-    PartialCRef(const Partial& p, const StatisticPartial& sp)
-      : partial(p), statpart(sp) {};
+    PartialCRef(const Partial& p, const StatisticPartial& sp) : partial(p), statpart(sp){};
 
     const Partial& partial;
     const StatisticPartial& statpart;
@@ -374,10 +390,8 @@ private:
   friend class PerThreadTemporary;
   friend class Metric;
   friend class ProfilePipeline;
-  util::locked_unordered_map<util::reference_index<const Metric>,
-    StatisticAccumulator> stats;
+  util::locked_unordered_map<util::reference_index<const Metric>, StatisticAccumulator> stats;
 };
-
 }  // namespace hpctoolkit
 
 #endif  // HPCTOOLKIT_PROFILE_ACCUMULATORS_H

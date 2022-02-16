@@ -49,24 +49,14 @@
 // platforms that don't use this technique.
 //***************************************************************************
 
-#include "process-ranges.h"
 #include "code-ranges.h"
+#include "process-ranges.h"
 
+void process_range_init(void) {}
 
-void
-process_range_init(void)
-{
-}
+void process_range(
+    const char* name, long offset, void* vstart, void* vend, DiscoverFnTy fn_discovery) {}
 
-
-void 
-process_range(const char *name, long offset, void *vstart, void *vend, DiscoverFnTy fn_discovery)
-{
-}
-
-
-bool
-range_contains_control_flow(void *vstart, void *vend)
-{
+bool range_contains_control_flow(void* vstart, void* vend) {
   return true;
 }

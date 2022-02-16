@@ -80,7 +80,7 @@
 #endif
 #endif  // __cplusplus >= 201703L
 
-#define _HPCTOOLKIT_STDSHIM_STD_HAS(X) defined(_HPCTOOLKIT_STDSHIM_HAS_ ## X)
+#define _HPCTOOLKIT_STDSHIM_STD_HAS(X) defined(_HPCTOOLKIT_STDSHIM_HAS_##X)
 
 #endif  // HPCTOOLKIT_STDSHIM_VERSION_H
 

@@ -52,66 +52,55 @@
 // GPU binaries.  We don't analyze anything here, just setup a Makefile and
 // launch the work for each GPU binary.
 
-//****************************** Include Files ******************************
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <dirent.h>
-
-#include <iostream>
-using std::cerr;
-using std::endl;
-
-#include <dlfcn.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <fstream>
-#include <string>
-#include <streambuf>
-#include <new>
-#include <vector>
-#include <unistd.h>
-
-#include <include/gpu-binary.h>
-#include <include/hpctoolkit-config.h>
-
 #include "Args.hpp"
 
-#include <lib/banal/Struct.hpp>
-#include <lib/prof-lean/hpcio.h>
-#include <lib/prof-lean/cpuset_hwthreads.h>
-#include <lib/support/diagnostics.h>
-#include <lib/support/realpath.h>
-#include <lib/support/FileUtil.hpp>
-#include <lib/support/IOUtil.hpp>
-#include <lib/support/RealPathMgr.hpp>
+#include "include/gpu-binary.h"
+#include "include/hpctoolkit-config.h"
+#include "lib/banal/Struct.hpp"
+#include "lib/prof-lean/cpuset_hwthreads.h"
+#include "lib/prof-lean/hpcio.h"
+#include "lib/support/diagnostics.h"
+#include "lib/support/FileUtil.hpp"
+#include "lib/support/IOUtil.hpp"
+#include "lib/support/realpath.h"
+#include "lib/support/RealPathMgr.hpp"
+
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fstream>
+#include <iostream>
+#include <new>
+#include <stdio.h>
+#include <stdlib.h>
+#include <streambuf>
+#include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <vector>
+
+using std::cerr;
+using std::endl;
 
 #ifdef ENABLE_OPENMP
 #include <omp.h>
 #endif
 
-#define PRINT_ERROR(mesg)  \
-  DIAG_EMsg(mesg << "\nTry 'hpcstruct --help' for more information.")
+#define PRINT_ERROR(mesg) DIAG_EMsg(mesg << "\nTry 'hpcstruct --help' for more information.")
 
 using namespace std;
 
-static int
-realmain(int argc, char* argv[]);
-
-
-//***************************** Analyze Cubins ******************************
+static int realmain(int argc, char* argv[]);
 
 static const char* analysis_makefile =
 #include "pmake.h"
-;
+    ;
 
 //
 // For a measurements directory, write a Makefile and launch hpcstruct
 // to analyze CPU and GPU binaries associated with the measurements
 //
-static void
-doMeasurementsDir(string measurements_dir, BAnal::Struct::Options & opts)
-{
+static void doMeasurementsDir(string measurements_dir, BAnal::Struct::Options& opts) {
   measurements_dir = RealPath(measurements_dir.c_str());
 
   //
@@ -119,10 +108,10 @@ doMeasurementsDir(string measurements_dir, BAnal::Struct::Options & opts)
   //
 
   string gpubin_dir = measurements_dir + "/" GPU_BINARY_DIRECTORY;
-  struct dirent *ent;
+  struct dirent* ent;
   bool has_gpubin = false;
 
-  DIR *dir = opendir(gpubin_dir.c_str());
+  DIR* dir = opendir(gpubin_dir.c_str());
   if (dir != NULL) {
     while ((ent = readdir(dir)) != NULL) {
       string file_name(ent->d_name);
@@ -137,22 +126,19 @@ doMeasurementsDir(string measurements_dir, BAnal::Struct::Options & opts)
   //
   // Put hpctoolkit on PATH
   //
-  char *path = getenv("PATH");
+  char* path = getenv("PATH");
   string new_path = string(HPCTOOLKIT_INSTALL_PREFIX) + "/bin" + ":" + path;
 
   if (has_gpubin) {
     // Put cuda (nvdisasm) on path.
-    new_path = new_path +":" + CUDA_INSTALL_PREFIX + "/bin";
+    new_path = new_path + ":" + CUDA_INSTALL_PREFIX + "/bin";
   }
 
   setenv("PATH", new_path.c_str(), 1);
 
-  string hpcproftt_path = string(HPCTOOLKIT_INSTALL_PREFIX) 
-    + "/libexec/hpctoolkit/hpcproftt";
+  string hpcproftt_path = string(HPCTOOLKIT_INSTALL_PREFIX) + "/libexec/hpctoolkit/hpcproftt";
 
-  string struct_path = string(HPCTOOLKIT_INSTALL_PREFIX) 
-    + "/bin/hpcstruct";
-
+  string struct_path = string(HPCTOOLKIT_INSTALL_PREFIX) + "/bin/hpcstruct";
 
   //
   // Write Makefile and launch analysis.
@@ -164,7 +150,7 @@ doMeasurementsDir(string measurements_dir, BAnal::Struct::Options & opts)
   fstream makefile;
   makefile.open(makefile_name, fstream::out | fstream::trunc);
 
-  if (! makefile.is_open()) {
+  if (!makefile.is_open()) {
     DIAG_EMsg("Unable to write file: " << makefile_name);
     exit(1);
   }
@@ -172,31 +158,31 @@ doMeasurementsDir(string measurements_dir, BAnal::Struct::Options & opts)
   unsigned int pthreads;
   unsigned int jobs;
 
-  if (opts.jobs == 0) { // not specified
+  if (opts.jobs == 0) {  // not specified
     unsigned int hwthreads = cpuset_hwthreads();
-    jobs = std::max(hwthreads/2, 1U);
+    jobs = std::max(hwthreads / 2, 1U);
     pthreads = std::min(jobs, 16U);
   } else {
     jobs = opts.jobs;
     pthreads = jobs;
   }
-    
+
   string gpucfg = opts.compute_gpu_cfg ? "yes" : "no";
 
-  makefile << "MEAS_DIR =  "    << measurements_dir << "\n"
-	   << "GPUBIN_CFG = "   << gpucfg << "\n"
-	   << "CPU_ANALYZE = "  << opts.analyze_cpu_binaries << "\n"
-	   << "GPU_ANALYZE = "  << opts.analyze_gpu_binaries << "\n"
-	   << "PAR_SIZE = "     << opts.parallel_analysis_threshold << "\n"
-	   << "JOBS = "         << jobs << "\n"
-	   << "PTHREADS = "     << pthreads << "\n"
-	   << "PROFTT = "       << hpcproftt_path << "\n"
-	   << "STRUCT= "        << struct_path << "\n"
-	   << analysis_makefile << endl;
+  makefile << "MEAS_DIR =  " << measurements_dir << "\n"
+           << "GPUBIN_CFG = " << gpucfg << "\n"
+           << "CPU_ANALYZE = " << opts.analyze_cpu_binaries << "\n"
+           << "GPU_ANALYZE = " << opts.analyze_gpu_binaries << "\n"
+           << "PAR_SIZE = " << opts.parallel_analysis_threshold << "\n"
+           << "JOBS = " << jobs << "\n"
+           << "PTHREADS = " << pthreads << "\n"
+           << "PROFTT = " << hpcproftt_path << "\n"
+           << "STRUCT= " << struct_path << "\n"
+           << analysis_makefile << endl;
   makefile.close();
 
-  string make_cmd = string("make -C ") + structs_dir + " -k --silent "
-      + " --no-print-directory all";
+  string make_cmd =
+      string("make -C ") + structs_dir + " -k --silent " + " --no-print-directory all";
 
   if (system(make_cmd.c_str()) != 0) {
     DIAG_EMsg("Make hpcstruct files for measurement directory failed.");
@@ -204,36 +190,25 @@ doMeasurementsDir(string measurements_dir, BAnal::Struct::Options & opts)
   }
 }
 
-//****************************** Main Program *******************************
-
-int
-main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
   try {
     return realmain(argc, argv);
-  }
-  catch (const Diagnostics::Exception& x) {
+  } catch (const Diagnostics::Exception& x) {
     DIAG_EMsg(x.message());
     exit(1);
-  } 
-  catch (const std::bad_alloc& x) {
+  } catch (const std::bad_alloc& x) {
     DIAG_EMsg("[std::bad_alloc] " << x.what());
     exit(1);
-  } 
-  catch (const std::exception& x) {
+  } catch (const std::exception& x) {
     DIAG_EMsg("[std::exception] " << x.what());
     exit(1);
-  } 
-  catch (...) {
+  } catch (...) {
     DIAG_EMsg("Unknown exception encountered!");
     exit(2);
   }
 }
 
-
-static int
-realmain(int argc, char* argv[])
-{
+static int realmain(int argc, char* argv[]) {
   Args args(argc, argv);
 
   RealPathMgr::singleton().searchPaths(args.searchPathStr);
@@ -255,7 +230,7 @@ realmain(int argc, char* argv[])
   //
 
   jobs_struct = (args.jobs_struct >= 1) ? args.jobs_struct : args.jobs;
-  jobs_parse  = (args.jobs_parse >= 1)  ? args.jobs_parse  : args.jobs;
+  jobs_parse = (args.jobs_parse >= 1) ? args.jobs_parse : args.jobs;
 
 #ifndef ENABLE_OPENMP_SYMTAB
   jobs_symtab = 1;
@@ -273,9 +248,9 @@ realmain(int argc, char* argv[])
 
   BAnal::Struct::Options opts;
 
-  opts.set(args.jobs, jobs_struct, jobs_parse, jobs_symtab, args.show_time,
-	   args.analyze_cpu_binaries, args.analyze_gpu_binaries,
-	   args.compute_gpu_cfg, args.parallel_analysis_threshold);
+  opts.set(
+      args.jobs, jobs_struct, jobs_parse, jobs_symtab, args.show_time, args.analyze_cpu_binaries,
+      args.analyze_gpu_binaries, args.compute_gpu_cfg, args.parallel_analysis_threshold);
 
   // ------------------------------------------------------------
   // If in_filenm is a directory, then analyze separately
@@ -322,8 +297,8 @@ realmain(int argc, char* argv[])
   }
 
   try {
-    BAnal::Struct::makeStructure(args.in_filenm, outFile, gapsFile, gapsName,
-			         args.searchPathStr, opts);
+    BAnal::Struct::makeStructure(
+        args.in_filenm, outFile, gapsFile, gapsName, args.searchPathStr, opts);
   } catch (int n) {
     IOUtil::CloseStream(outFile);
     if (osnm) {

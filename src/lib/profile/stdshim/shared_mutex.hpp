@@ -68,8 +68,8 @@
 #include <shared_mutex>
 #else
 #include <atomic>
-#include <mutex>
 #include <condition_variable>
+#include <mutex>
 #endif
 
 namespace hpctoolkit::stdshim {
@@ -81,7 +81,9 @@ namespace detail {
 // So we use the timed version if we don't have the untimed, and our own thing
 // if neither are available (since Boost's implementation isn't great).
 #if STD_HAS(shared_mutex)
+
 using shared_mutex = std::shared_mutex;
+
 #else  // STD_HAS(shared_mutex)
 class shared_mutex {
 public:
@@ -95,6 +97,7 @@ public:
   void lock_shared();
   bool try_lock_shared();
   void unlock_shared();
+
 private:
   std::atomic<unsigned int> incoming;
   std::atomic<unsigned int> outgoing;
@@ -110,7 +113,6 @@ private:
   bool wwakeup;
 };
 #endif
-
 }  // namespace detail
 
 // In any event, whatever choice of shared_mutex above has to be wrapped for
@@ -128,13 +130,12 @@ public:
   void lock_shared();
   bool try_lock_shared();
   void unlock_shared();
+
 private:
   detail::shared_mutex real;
   char arc_rw;
   char arc_wr;
 };
-
-
 }  // namespace hpctoolkit::stdshim
 
 #ifndef STDSHIM_DONT_UNDEF
