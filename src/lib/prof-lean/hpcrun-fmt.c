@@ -63,35 +63,23 @@
 //
 //***************************************************************************
 
-//************************* System Include Files ****************************
-
-#include <stdio.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-
-#include <sys/stat.h>
-
-//*************************** User Include Files ****************************
-
-#include <include/gcc-attr.h>
-
-#include "hpcio.h"
-#include "hpcio-buffer.h"
-#include "hpcfmt.h"
 #include "hpcrun-fmt.h"
 
-//***************************************************************************
+#include "hpcfmt.h"
+#include "hpcio-buffer.h"
+#include "hpcio.h"
 
-//***************************************************************************
-// hdr
-//***************************************************************************
+#include "include/gcc-attr.h"
 
-int
-hpcrun_fmt_hdr_fread(hpcrun_fmt_hdr_t* hdr, FILE* infs, hpcfmt_alloc_fn alloc)
-{
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+int hpcrun_fmt_hdr_fread(hpcrun_fmt_hdr_t* hdr, FILE* infs, hpcfmt_alloc_fn alloc) {
   char tag[HPCRUN_FMT_MagicLen + 1];
 
   int nr = fread(tag, 1, HPCRUN_FMT_MagicLen, infs);
@@ -121,16 +109,13 @@ hpcrun_fmt_hdr_fread(hpcrun_fmt_hdr_t* hdr, FILE* infs, hpcfmt_alloc_fn alloc)
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_hdr_fwrite(FILE* fs, ...)
-{
+int hpcrun_fmt_hdr_fwrite(FILE* fs, ...) {
   va_list args;
   va_start(args, fs);
 
-  fwrite(HPCRUN_FMT_Magic,   1, HPCRUN_FMT_MagicLen, fs);
+  fwrite(HPCRUN_FMT_Magic, 1, HPCRUN_FMT_MagicLen, fs);
   fwrite(HPCRUN_FMT_Version, 1, HPCRUN_FMT_VersionLen, fs);
-  fwrite(HPCRUN_FMT_Endian,  1, HPCRUN_FMT_EndianLen, fs);
+  fwrite(HPCRUN_FMT_Endian, 1, HPCRUN_FMT_EndianLen, fs);
 
   hpcfmt_nvpairs_vfwrite(fs, args);
 
@@ -139,10 +124,7 @@ hpcrun_fmt_hdr_fwrite(FILE* fs, ...)
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_hdr_fprint(hpcrun_fmt_hdr_t* hdr, FILE* fs)
-{
+int hpcrun_fmt_hdr_fprint(hpcrun_fmt_hdr_t* hdr, FILE* fs) {
   fprintf(fs, "%s\n", HPCRUN_FMT_Magic);
 
   fprintf(fs, "[hdr:\n");
@@ -154,29 +136,18 @@ hpcrun_fmt_hdr_fprint(hpcrun_fmt_hdr_t* hdr, FILE* fs)
   return HPCFMT_OK;
 }
 
-
-void
-hpcrun_fmt_hdr_free(hpcrun_fmt_hdr_t* hdr, hpcfmt_free_fn dealloc)
-{
+void hpcrun_fmt_hdr_free(hpcrun_fmt_hdr_t* hdr, hpcfmt_free_fn dealloc) {
   if (dealloc) {
     hpcfmt_nvpairList_free(&(hdr->nvps), dealloc);
   }
 }
 
-
-//***************************************************************************
-// epoch-hdr
-//***************************************************************************
-
-int
-hpcrun_fmt_epochHdr_fread(hpcrun_fmt_epochHdr_t* ehdr, FILE* fs,
-			  hpcfmt_alloc_fn alloc)
-{
+int hpcrun_fmt_epochHdr_fread(hpcrun_fmt_epochHdr_t* ehdr, FILE* fs, hpcfmt_alloc_fn alloc) {
   char tag[HPCRUN_FMT_EpochTagLen + 1];
 
   int nr = fread(tag, 1, HPCRUN_FMT_EpochTagLen, fs);
   tag[HPCRUN_FMT_EpochTagLen] = '\0';
-  
+
   if (nr != HPCRUN_FMT_EpochTagLen) {
     return (nr == 0 && feof(fs)) ? HPCFMT_EOF : HPCFMT_ERR;
   }
@@ -186,7 +157,7 @@ hpcrun_fmt_epochHdr_fread(hpcrun_fmt_epochHdr_t* ehdr, FILE* fs,
   }
 
   // removed m_raToCallsiteOfst from epoch Hdr. don't change file format!
-  uint32_t dummy; 
+  uint32_t dummy;
 
   HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(ehdr->flags.bits), fs));
   HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(ehdr->measurementGranularity), fs));
@@ -196,17 +167,14 @@ hpcrun_fmt_epochHdr_fread(hpcrun_fmt_epochHdr_t* ehdr, FILE* fs,
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_epochHdr_fwrite(FILE* fs, epoch_flags_t flags,
-			   uint64_t measurementGranularity,
-			   ...)
-{
+int hpcrun_fmt_epochHdr_fwrite(
+    FILE* fs, epoch_flags_t flags, uint64_t measurementGranularity, ...) {
   va_list args;
   va_start(args, measurementGranularity);
 
   int nw = fwrite(HPCRUN_FMT_EpochTag, 1, HPCRUN_FMT_EpochTagLen, fs);
-  if (nw != HPCRUN_FMT_EpochTagLen) return HPCFMT_ERR;
+  if (nw != HPCRUN_FMT_EpochTagLen)
+    return HPCFMT_ERR;
 
   // removed m_raToCallsiteOfst from epoch Hdr. don't change file format!
   uint32_t dummy = 0;
@@ -222,75 +190,59 @@ hpcrun_fmt_epochHdr_fwrite(FILE* fs, epoch_flags_t flags,
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_epochHdr_fprint(hpcrun_fmt_epochHdr_t* ehdr, FILE* fs)
-{
+int hpcrun_fmt_epochHdr_fprint(hpcrun_fmt_epochHdr_t* ehdr, FILE* fs) {
   fprintf(fs, "%s\n", HPCRUN_FMT_EpochTag);
   fprintf(fs, "[epoch-hdr:\n");
-  fprintf(fs, "  (flags: 0x%"PRIx64")\n", ehdr->flags.bits);
-  fprintf(fs, "  (measurement-granularity: %"PRIu64")\n",
-	  ehdr->measurementGranularity);
+  fprintf(fs, "  (flags: 0x%" PRIx64 ")\n", ehdr->flags.bits);
+  fprintf(fs, "  (measurement-granularity: %" PRIu64 ")\n", ehdr->measurementGranularity);
   hpcfmt_nvpairList_fprint(&(ehdr->nvps), fs, "  ");
   fprintf(fs, "]\n");
 
   return HPCFMT_OK;
 }
 
-
-void
-hpcrun_fmt_epochHdr_free(hpcrun_fmt_epochHdr_t* ehdr, hpcfmt_free_fn dealloc)
-{
+void hpcrun_fmt_epochHdr_free(hpcrun_fmt_epochHdr_t* ehdr, hpcfmt_free_fn dealloc) {
   if (dealloc) {
     hpcfmt_nvpairList_free(&(ehdr->nvps), dealloc);
   }
 }
 
-
-//***************************************************************************
-// metric-tbl
-//***************************************************************************
-
 const metric_desc_t metricDesc_NULL = {
-  .name          = NULL,
-  .description   = NULL,
-  .flags.bits_big[0] = 0,
-  .flags.bits_big[1] = 0,
-  .period        = 0,
-  .properties = {.time = 0,.cycles = 0},
-  .formula       = NULL,
-  .format        = NULL,
+    .name = NULL,
+    .description = NULL,
+    .flags.bits_big[0] = 0,
+    .flags.bits_big[1] = 0,
+    .period = 0,
+    .properties = {.time = 0, .cycles = 0},
+    .formula = NULL,
+    .format = NULL,
 };
 
 const hpcrun_metricFlags_t hpcrun_metricFlags_NULL = {
-  .fields.ty          = MetricFlags_Ty_NULL,
-  .fields.valTy       = MetricFlags_ValTy_NULL,
-  .fields.valFmt      = MetricFlags_ValFmt_NULL,
-  .fields.unused0     = 0,
+    .fields.ty = MetricFlags_Ty_NULL,
+    .fields.valTy = MetricFlags_ValTy_NULL,
+    .fields.valFmt = MetricFlags_ValFmt_NULL,
+    .fields.unused0 = 0,
 
-  .fields.partner     = 0,
-  .fields.show        = (uint8_t)true,
-  .fields.showPercent = (uint8_t)true,
+    .fields.partner = 0,
+    .fields.show = (uint8_t) true,
+    .fields.showPercent = (uint8_t) true,
 
-  .fields.unused1     = 0,
+    .fields.unused1 = 0,
 };
 
-hpcrun_metricVal_t hpcrun_metricVal_ZERO = { .bits = 0 };
+hpcrun_metricVal_t hpcrun_metricVal_ZERO = {.bits = 0};
 
-//***************************************************************************
-
-int
-hpcrun_fmt_metricTbl_fread(metric_tbl_t* metric_tbl, metric_aux_info_t **aux_info,
-		FILE* fs, double fmtVersion, hpcfmt_alloc_fn alloc)
-{
+int hpcrun_fmt_metricTbl_fread(
+    metric_tbl_t* metric_tbl, metric_aux_info_t** aux_info, FILE* fs, double fmtVersion,
+    hpcfmt_alloc_fn alloc) {
   HPCFMT_ThrowIfError(hpcfmt_int4_fread(&(metric_tbl->len), fs));
   if (alloc) {
-    metric_tbl->lst =
-      (metric_desc_t*) alloc(metric_tbl->len * sizeof(metric_desc_t));
+    metric_tbl->lst = (metric_desc_t*)alloc(metric_tbl->len * sizeof(metric_desc_t));
   }
 
   size_t aux_info_size = sizeof(metric_aux_info_t) * metric_tbl->len;
-  metric_aux_info_t *perf_info = (metric_aux_info_t*)malloc(aux_info_size);
+  metric_aux_info_t* perf_info = (metric_aux_info_t*)malloc(aux_info_size);
   memset(perf_info, 0, aux_info_size);
 
   for (uint32_t i = 0; i < metric_tbl->len; i++) {
@@ -298,28 +250,25 @@ hpcrun_fmt_metricTbl_fread(metric_tbl_t* metric_tbl, metric_aux_info_t **aux_inf
     HPCFMT_ThrowIfError(hpcrun_fmt_metricDesc_fread(x, &(perf_info)[i], fs, fmtVersion, alloc));
   }
   *aux_info = perf_info;
-  
+
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_metricTbl_fwrite(metric_desc_p_tbl_t* metric_tbl, metric_aux_info_t *aux_info, FILE* fs)
-{
+int hpcrun_fmt_metricTbl_fwrite(
+    metric_desc_p_tbl_t* metric_tbl, metric_aux_info_t* aux_info, FILE* fs) {
   for (uint32_t i = 0; i < metric_tbl->len; i++) {
-
-	  // corner case: for other sampling sources than perf event, the
-	  // value of aux_info is NULL
+    // corner case: for other sampling sources than perf event, the
+    // value of aux_info is NULL
 
     metric_aux_info_t info_tmp;
-	metric_aux_info_t *info_ptr = aux_info;
+    metric_aux_info_t* info_ptr = aux_info;
 
-	if (aux_info == NULL) {
-	  memset(&info_tmp, 0, sizeof(metric_aux_info_t));
-	  info_ptr = &info_tmp;
-	} else {
-	  info_ptr = &(aux_info[i]);
-	}
+    if (aux_info == NULL) {
+      memset(&info_tmp, 0, sizeof(metric_aux_info_t));
+      info_ptr = &info_tmp;
+    } else {
+      info_ptr = &(aux_info[i]);
+    }
 
     hpcrun_fmt_metricDesc_fwrite(metric_tbl->lst[i], info_ptr, fs);
   }
@@ -327,24 +276,18 @@ hpcrun_fmt_metricTbl_fwrite(metric_desc_p_tbl_t* metric_tbl, metric_aux_info_t *
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_metricTbl_fprint(metric_tbl_t* metric_tbl, metric_aux_info_t *aux_info, FILE* fs)
-{
+int hpcrun_fmt_metricTbl_fprint(metric_tbl_t* metric_tbl, metric_aux_info_t* aux_info, FILE* fs) {
   fprintf(fs, "[metric-tbl: (num-entries: %u)\n", metric_tbl->len);
   for (uint32_t i = 0; i < metric_tbl->len; i++) {
     metric_desc_t* x = &metric_tbl->lst[i];
     hpcrun_fmt_metricDesc_fprint(x, &(aux_info[i]), fs, "  ");
   }
   fputs("]\n", fs);
-  
+
   return HPCFMT_OK;
 }
 
-
-void
-hpcrun_fmt_metricTbl_free(metric_tbl_t* metric_tbl, hpcfmt_free_fn dealloc)
-{
+void hpcrun_fmt_metricTbl_free(metric_tbl_t* metric_tbl, hpcfmt_free_fn dealloc) {
   for (uint32_t i = 0; i < metric_tbl->len; i++) {
     metric_desc_t* x = &metric_tbl->lst[i];
     hpcrun_fmt_metricDesc_free(x, dealloc);
@@ -353,37 +296,30 @@ hpcrun_fmt_metricTbl_free(metric_tbl_t* metric_tbl, hpcfmt_free_fn dealloc)
   metric_tbl->lst = NULL;
 }
 
-
-//***************************************************************************
-
-int
-hpcrun_fmt_metricDesc_fread(metric_desc_t* x, metric_aux_info_t *aux_info, FILE* fs,
-			    double GCC_ATTR_UNUSED fmtVersion,
-			    hpcfmt_alloc_fn alloc)
-{
+int hpcrun_fmt_metricDesc_fread(
+    metric_desc_t* x, metric_aux_info_t* aux_info, FILE* fs, double GCC_ATTR_UNUSED fmtVersion,
+    hpcfmt_alloc_fn alloc) {
   HPCFMT_ThrowIfError(hpcfmt_str_fread(&(x->name), fs, alloc));
   HPCFMT_ThrowIfError(hpcfmt_str_fread(&(x->description), fs, alloc));
   HPCFMT_ThrowIfError(hpcfmt_intX_fread(x->flags.bits, sizeof(x->flags), fs));
 
   // FIXME: tallent: temporarily support old non-portable convention
-  if ( !(x->flags.fields.ty == MetricFlags_Ty_Raw
-	   || x->flags.fields.ty == MetricFlags_Ty_Final)
-       || x->flags.fields.unused0 != 0
-       || x->flags.fields.unused1 != 0) {
+  if (!(x->flags.fields.ty == MetricFlags_Ty_Raw || x->flags.fields.ty == MetricFlags_Ty_Final)
+      || x->flags.fields.unused0 != 0 || x->flags.fields.unused1 != 0) {
     fseek(fs, -sizeof(x->flags), SEEK_CUR);
-    
+
     hpcrun_metricFlags_XXX_t x_flags_old;
     HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(x_flags_old.bits[0]), fs));
     HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(x_flags_old.bits[1]), fs));
-    
+
     x->flags.bits_big[0] = 0;
     x->flags.bits_big[1] = 0;
 
-    x->flags.fields.ty          = x_flags_old.fields.ty;
-    x->flags.fields.valTy       = x_flags_old.fields.valTy;
-    x->flags.fields.valFmt      = x_flags_old.fields.valFmt;
-    x->flags.fields.partner     = (uint16_t) x_flags_old.fields.partner;
-    x->flags.fields.show        = x_flags_old.fields.show;
+    x->flags.fields.ty = x_flags_old.fields.ty;
+    x->flags.fields.valTy = x_flags_old.fields.valTy;
+    x->flags.fields.valFmt = x_flags_old.fields.valFmt;
+    x->flags.fields.partner = (uint16_t)x_flags_old.fields.partner;
+    x->flags.fields.show = x_flags_old.fields.show;
     x->flags.fields.showPercent = x_flags_old.fields.showPercent;
   }
 
@@ -391,10 +327,10 @@ hpcrun_fmt_metricDesc_fread(metric_desc_t* x, metric_aux_info_t *aux_info, FILE*
   HPCFMT_ThrowIfError(hpcfmt_str_fread(&(x->formula), fs, alloc));
   HPCFMT_ThrowIfError(hpcfmt_str_fread(&(x->format), fs, alloc));
 
-  HPCFMT_ThrowIfError(hpcfmt_int2_fread ((uint16_t*)&(x->is_frequency_metric),    fs));
-  HPCFMT_ThrowIfError(hpcfmt_int2_fread ((uint16_t*)&(aux_info->is_multiplexed),  fs));
-  HPCFMT_ThrowIfError(hpcfmt_real8_fread(&(aux_info->threshold_mean),  fs));
-  HPCFMT_ThrowIfError(hpcfmt_int8_fread ((&aux_info->num_samples),     fs));
+  HPCFMT_ThrowIfError(hpcfmt_int2_fread((uint16_t*)&(x->is_frequency_metric), fs));
+  HPCFMT_ThrowIfError(hpcfmt_int2_fread((uint16_t*)&(aux_info->is_multiplexed), fs));
+  HPCFMT_ThrowIfError(hpcfmt_real8_fread(&(aux_info->threshold_mean), fs));
+  HPCFMT_ThrowIfError(hpcfmt_int8_fread((&aux_info->num_samples), fs));
 
   // These two aren't written into the hpcrun file; hence manually set them.
   x->properties.time = 0;
@@ -403,10 +339,7 @@ hpcrun_fmt_metricDesc_fread(metric_desc_t* x, metric_aux_info_t *aux_info, FILE*
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_metricDesc_fwrite(metric_desc_t* x, metric_aux_info_t *aux_info, FILE* fs)
-{
+int hpcrun_fmt_metricDesc_fwrite(metric_desc_t* x, metric_aux_info_t* aux_info, FILE* fs) {
   HPCFMT_ThrowIfError(hpcfmt_str_fwrite(x->name, fs));
   HPCFMT_ThrowIfError(hpcfmt_str_fwrite(x->description, fs));
   HPCFMT_ThrowIfError(hpcfmt_intX_fwrite(x->flags.bits, sizeof(x->flags), fs));
@@ -423,29 +356,25 @@ hpcrun_fmt_metricDesc_fwrite(metric_desc_t* x, metric_aux_info_t *aux_info, FILE
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_metricDesc_fprint(metric_desc_t* x, metric_aux_info_t *aux_info, FILE* fs, const char* pre)
-{
-  fprintf(fs, "%s[(nm: %s) (desc: %s) "
-	  "((ty: %d) (val-ty: %d) (val-fmt: %d) (partner: %u) (show: %d) (showPercent: %d)) "
-	  "(period: %"PRIu64") (formula: %s) (format: %s)\n" ,
-	  pre, hpcfmt_str_ensure(x->name), hpcfmt_str_ensure(x->description),
-	  (int)x->flags.fields.ty, (int)x->flags.fields.valTy,
-	  (int)x->flags.fields.valFmt,
-	  (uint)x->flags.fields.partner, x->flags.fields.show, x->flags.fields.showPercent,
-	  x->period,
-	  hpcfmt_str_ensure(x->formula), hpcfmt_str_ensure(x->format));
-  fprintf(fs, "    (frequency: %d) (multiplexed: %d) (period-mean: %f) (num-samples: %d)]\n",
-          (int)x->is_frequency_metric, (int)aux_info->is_multiplexed,
-		  aux_info->threshold_mean,  (int) aux_info->num_samples);
+int hpcrun_fmt_metricDesc_fprint(
+    metric_desc_t* x, metric_aux_info_t* aux_info, FILE* fs, const char* pre) {
+  fprintf(
+      fs,
+      "%s[(nm: %s) (desc: %s) "
+      "((ty: %d) (val-ty: %d) (val-fmt: %d) (partner: %u) (show: %d) (showPercent: %d)) "
+      "(period: %" PRIu64 ") (formula: %s) (format: %s)\n",
+      pre, hpcfmt_str_ensure(x->name), hpcfmt_str_ensure(x->description), (int)x->flags.fields.ty,
+      (int)x->flags.fields.valTy, (int)x->flags.fields.valFmt, (uint)x->flags.fields.partner,
+      x->flags.fields.show, x->flags.fields.showPercent, x->period, hpcfmt_str_ensure(x->formula),
+      hpcfmt_str_ensure(x->format));
+  fprintf(
+      fs, "    (frequency: %d) (multiplexed: %d) (period-mean: %f) (num-samples: %d)]\n",
+      (int)x->is_frequency_metric, (int)aux_info->is_multiplexed, aux_info->threshold_mean,
+      (int)aux_info->num_samples);
   return HPCFMT_OK;
 }
 
-
-void
-hpcrun_fmt_metricDesc_free(metric_desc_t* x, hpcfmt_free_fn dealloc)
-{
+void hpcrun_fmt_metricDesc_free(metric_desc_t* x, hpcfmt_free_fn dealloc) {
   hpcfmt_str_free(x->name, dealloc);
   x->name = NULL;
   hpcfmt_str_free(x->description, dealloc);
@@ -456,22 +385,14 @@ hpcrun_fmt_metricDesc_free(metric_desc_t* x, hpcfmt_free_fn dealloc)
   x->format = NULL;
 }
 
-
-void
-hpcrun_fmt_metric_set_format(metric_desc_t *metric_desc, char *format)
-{
+void hpcrun_fmt_metric_set_format(metric_desc_t* metric_desc, char* format) {
   metric_desc->format = format;
 }
 
-
-
-double 
-hpcrun_fmt_metric_get_value(metric_desc_t metric_desc, hpcrun_metricVal_t metric)
-{
+double hpcrun_fmt_metric_get_value(metric_desc_t metric_desc, hpcrun_metricVal_t metric) {
   if (metric_desc.flags.fields.valFmt == MetricFlags_ValFmt_Int) {
-    return (double) metric.i;
-  } 
-  else if (metric_desc.flags.fields.valFmt == MetricFlags_ValFmt_Real) {
+    return (double)metric.i;
+  } else if (metric_desc.flags.fields.valFmt == MetricFlags_ValFmt_Real) {
     return metric.r;
   }
   // TODO: default value
@@ -479,46 +400,32 @@ hpcrun_fmt_metric_get_value(metric_desc_t metric_desc, hpcrun_metricVal_t metric
 }
 
 // set a new value into a metric
-void
-hpcrun_fmt_metric_set_value(metric_desc_t metric_desc, 
-   hpcrun_metricVal_t *metric, double value)
-{
+void hpcrun_fmt_metric_set_value(
+    metric_desc_t metric_desc, hpcrun_metricVal_t* metric, double value) {
   if (metric_desc.flags.fields.valFmt == MetricFlags_ValFmt_Int) {
-    metric->i = (int) value;
-  } 
-  else if (metric_desc.flags.fields.valFmt == MetricFlags_ValFmt_Real) {
+    metric->i = (int)value;
+  } else if (metric_desc.flags.fields.valFmt == MetricFlags_ValFmt_Real) {
     metric->r = value;
   }
 }
 
 // set a new integer value into a metric, and force it to be
 // an integer type metric
-void
-hpcrun_fmt_metric_set_value_int( hpcrun_metricFlags_t *flags,
-   hpcrun_metricVal_t *metric, int value)
-{
+void hpcrun_fmt_metric_set_value_int(
+    hpcrun_metricFlags_t* flags, hpcrun_metricVal_t* metric, int value) {
   flags->fields.valFmt = MetricFlags_ValFmt_Int;
   metric->i = value;
 }
 
 // set a new double value into a metric, and force it to be
 // a real type metric
-void
-hpcrun_fmt_metric_set_value_real( hpcrun_metricFlags_t *flags,
-   hpcrun_metricVal_t *metric, double value)
-{
+void hpcrun_fmt_metric_set_value_real(
+    hpcrun_metricFlags_t* flags, hpcrun_metricVal_t* metric, double value) {
   flags->fields.valFmt = MetricFlags_ValFmt_Real;
   metric->r = value;
 }
 
-
-//***************************************************************************
-// loadmap
-//***************************************************************************
-
-int
-hpcrun_fmt_loadmap_fread(loadmap_t* loadmap, FILE* fs, hpcfmt_alloc_fn alloc)
-{
+int hpcrun_fmt_loadmap_fread(loadmap_t* loadmap, FILE* fs, hpcfmt_alloc_fn alloc) {
   HPCFMT_ThrowIfError(hpcfmt_int4_fread(&(loadmap->len), fs));
   if (alloc) {
     loadmap->lst = alloc(loadmap->len * sizeof(loadmap_entry_t));
@@ -532,37 +439,28 @@ hpcrun_fmt_loadmap_fread(loadmap_t* loadmap, FILE* fs, hpcfmt_alloc_fn alloc)
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_loadmap_fwrite(loadmap_t* loadmap, FILE* fs)
-{
+int hpcrun_fmt_loadmap_fwrite(loadmap_t* loadmap, FILE* fs) {
   HPCFMT_ThrowIfError(hpcfmt_int4_fwrite(loadmap->len, fs));
   for (uint32_t i = 0; i < loadmap->len; i++) {
     loadmap_entry_t* e = &loadmap->lst[i];
     HPCFMT_ThrowIfError(hpcrun_fmt_loadmapEntry_fwrite(e, fs));
   }
-  
+
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_loadmap_fprint(loadmap_t* loadmap, FILE* fs)
-{
+int hpcrun_fmt_loadmap_fprint(loadmap_t* loadmap, FILE* fs) {
   fprintf(fs, "[loadmap: (num-entries: %u)\n", loadmap->len);
   for (uint32_t i = 0; i < loadmap->len; i++) {
     loadmap_entry_t* e = &loadmap->lst[i];
     HPCFMT_ThrowIfError(hpcrun_fmt_loadmapEntry_fprint(e, fs, "  "));
   }
   fprintf(fs, "]\n");
-  
+
   return HPCFMT_OK;
 }
 
-
-void
-hpcrun_fmt_loadmap_free(loadmap_t* loadmap, hpcfmt_free_fn dealloc)
-{
+void hpcrun_fmt_loadmap_free(loadmap_t* loadmap, hpcfmt_free_fn dealloc) {
   for (uint32_t i = 0; i < loadmap->len; i++) {
     loadmap_entry_t* e = &loadmap->lst[i];
     hpcrun_fmt_loadmapEntry_free(e, dealloc);
@@ -571,55 +469,31 @@ hpcrun_fmt_loadmap_free(loadmap_t* loadmap, hpcfmt_free_fn dealloc)
   loadmap->lst = NULL;
 }
 
-
-//***************************************************************************
-
-int
-hpcrun_fmt_loadmapEntry_fread(loadmap_entry_t* x, FILE* fs,
-			      hpcfmt_alloc_fn alloc)
-{
+int hpcrun_fmt_loadmapEntry_fread(loadmap_entry_t* x, FILE* fs, hpcfmt_alloc_fn alloc) {
   HPCFMT_ThrowIfError(hpcfmt_int2_fread(&(x->id), fs));
   HPCFMT_ThrowIfError(hpcfmt_str_fread(&(x->name), fs, alloc));
   HPCFMT_ThrowIfError(hpcfmt_int8_fread(&(x->flags), fs));
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_loadmapEntry_fwrite(loadmap_entry_t* x, FILE* fs)
-{
+int hpcrun_fmt_loadmapEntry_fwrite(loadmap_entry_t* x, FILE* fs) {
   HPCFMT_ThrowIfError(hpcfmt_int2_fwrite(x->id, fs));
   HPCFMT_ThrowIfError(hpcfmt_str_fwrite(x->name, fs));
   HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(x->flags, fs));
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_loadmapEntry_fprint(loadmap_entry_t* x, FILE* fs, const char* pre)
-{
-  fprintf(fs, "%s[(id: %u) (nm: %s) (flg: 0x%"PRIx64")]\n",
-	  pre, (uint)x->id, x->name, x->flags);
+int hpcrun_fmt_loadmapEntry_fprint(loadmap_entry_t* x, FILE* fs, const char* pre) {
+  fprintf(fs, "%s[(id: %u) (nm: %s) (flg: 0x%" PRIx64 ")]\n", pre, (uint)x->id, x->name, x->flags);
   return HPCFMT_OK;
 }
 
-
-void
-hpcrun_fmt_loadmapEntry_free(loadmap_entry_t* x, hpcfmt_free_fn dealloc)
-{
+void hpcrun_fmt_loadmapEntry_free(loadmap_entry_t* x, hpcfmt_free_fn dealloc) {
   hpcfmt_str_free(x->name, dealloc);
   x->name = NULL;
 }
 
-
-//***************************************************************************
-// cct
-//***************************************************************************
-
- int
-hpcrun_fmt_cct_node_fread(hpcrun_fmt_cct_node_t* x,
-			  epoch_flags_t flags, FILE* fs)
-{
+int hpcrun_fmt_cct_node_fread(hpcrun_fmt_cct_node_t* x, epoch_flags_t flags, FILE* fs) {
   HPCFMT_ThrowIfError(hpcfmt_int4_fread(&x->id, fs));
   HPCFMT_ThrowIfError(hpcfmt_int4_fread(&x->id_parent, fs));
 
@@ -639,15 +513,11 @@ hpcrun_fmt_cct_node_fread(hpcrun_fmt_cct_node_t* x,
   for (int i = 0; i < x->num_metrics; ++i) {
     HPCFMT_ThrowIfError(hpcfmt_int8_fread(&x->metrics[i].bits, fs));
   }
-  
+
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_cct_node_fwrite(hpcrun_fmt_cct_node_t* x,
-			   epoch_flags_t flags, FILE* fs)
-{
+int hpcrun_fmt_cct_node_fwrite(hpcrun_fmt_cct_node_t* x, epoch_flags_t flags, FILE* fs) {
   HPCFMT_ThrowIfError(hpcfmt_int4_fwrite(x->id, fs));
   HPCFMT_ThrowIfError(hpcfmt_int4_fwrite(x->id_parent, fs));
 
@@ -665,20 +535,16 @@ hpcrun_fmt_cct_node_fwrite(hpcrun_fmt_cct_node_t* x,
   for (int i = 0; i < x->num_metrics; ++i) {
     HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(x->metrics[i].bits, fs));
   }
-  
+
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_cct_node_fprint(hpcrun_fmt_cct_node_t* x, FILE* fs,
-			   epoch_flags_t flags, const metric_tbl_t* metricTbl,
-			   const char* pre)
-{
+int hpcrun_fmt_cct_node_fprint(
+    hpcrun_fmt_cct_node_t* x, FILE* fs, epoch_flags_t flags, const metric_tbl_t* metricTbl,
+    const char* pre) {
   // N.B.: convert 'id' and 'id_parent' to ints so leaf flag
   // (negative) is apparent
-  fprintf(fs, "%s[node: (id: %d) (id-parent: %d) ",
-	  pre, (int)x->id, (int)x->id_parent);
+  fprintf(fs, "%s[node: (id: %d) (id-parent: %d) ", pre, (int)x->id, (int)x->id_parent);
 
   if (flags.fields.isLogicalUnwind) {
     char as_str[LUSH_ASSOC_INFO_STR_MIN_LEN];
@@ -687,7 +553,7 @@ hpcrun_fmt_cct_node_fprint(hpcrun_fmt_cct_node_t* x, FILE* fs,
     fprintf(fs, "(as: %s) ", as_str);
   }
 
-  fprintf(fs, "(lm-id: %u) (lm-ip: 0x%"PRIx64") ", (uint)x->lm_id, x->lm_ip);
+  fprintf(fs, "(lm-id: %u) (lm-ip: 0x%" PRIx64 ") ", (uint)x->lm_id, x->lm_ip);
 
   if (flags.fields.isLogicalUnwind) {
     hpcrun_fmt_lip_fprint(&x->lip, fs, "");
@@ -704,13 +570,9 @@ hpcrun_fmt_cct_node_fprint(hpcrun_fmt_cct_node_t* x, FILE* fs,
     }
 
     switch (mflags.fields.valFmt) {
-      default:
-      case MetricFlags_ValFmt_Int:
-	fprintf(fs, " %"PRIu64, x->metrics[i].i);
-	break;
-      case MetricFlags_ValFmt_Real:
-	fprintf(fs, " %g", x->metrics[i].r);
-	break;
+    default:
+    case MetricFlags_ValFmt_Int: fprintf(fs, " %" PRIu64, x->metrics[i].i); break;
+    case MetricFlags_ValFmt_Real: fprintf(fs, " %g", x->metrics[i].r); break;
     }
 
     if (i + 1 < x->num_metrics) {
@@ -720,38 +582,27 @@ hpcrun_fmt_cct_node_fprint(hpcrun_fmt_cct_node_t* x, FILE* fs,
   fprintf(fs, ")\n");
 
   fprintf(fs, "%s]\n", pre);
-  
+
   return HPCFMT_OK;
 }
 
-
-//***************************************************************************
-
-int
-hpcrun_fmt_lip_fread(lush_lip_t* x, FILE* fs)
-{
+int hpcrun_fmt_lip_fread(lush_lip_t* x, FILE* fs) {
   for (int i = 0; i < LUSH_LIP_DATA8_SZ; ++i) {
     HPCFMT_ThrowIfError(hpcfmt_int8_fread(&x->data8[i], fs));
   }
-  
+
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_lip_fwrite(lush_lip_t* x, FILE* fs)
-{
+int hpcrun_fmt_lip_fwrite(lush_lip_t* x, FILE* fs) {
   for (int i = 0; i < LUSH_LIP_DATA8_SZ; ++i) {
     HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(x->data8[i], fs));
   }
-  
+
   return HPCFMT_OK;
 }
 
-
-int
-hpcrun_fmt_lip_fprint(lush_lip_t* x, FILE* fs, const char* pre)
-{
+int hpcrun_fmt_lip_fprint(lush_lip_t* x, FILE* fs, const char* pre) {
   char lip_str[LUSH_LIP_STR_MIN_LEN];
   lush_lip_sprintf(lip_str, x);
 
@@ -760,21 +611,9 @@ hpcrun_fmt_lip_fprint(lush_lip_t* x, FILE* fs, const char* pre)
   return HPCFMT_OK;
 }
 
-
-//***************************************************************************
-// hpctrace (located here for now)
-//***************************************************************************
-
-//***************************************************************************
-// [hpctrace] hdr
-//***************************************************************************
-
 const hpctrace_hdr_flags_t hpctrace_hdr_flags_NULL = 0;
 
-
-int
-hpctrace_fmt_hdr_fread(hpctrace_fmt_hdr_t* hdr, FILE* infs)
-{
+int hpctrace_fmt_hdr_fread(hpctrace_fmt_hdr_t* hdr, FILE* infs) {
   char tag[HPCTRACE_FMT_MagicLen + 1];
 
   int nr = fread(tag, 1, HPCTRACE_FMT_MagicLen, infs);
@@ -807,12 +646,9 @@ hpctrace_fmt_hdr_fread(hpctrace_fmt_hdr_t* hdr, FILE* infs)
   return HPCFMT_OK;
 }
 
-
 // Writer based on outbuf.
 // Returns: HPCFMT_OK on success, else HPCFMT_ERR.
-int
-hpctrace_fmt_hdr_outbuf(hpctrace_hdr_flags_t flags, hpcio_outbuf_t* outbuf)
-{
+int hpctrace_fmt_hdr_outbuf(hpctrace_hdr_flags_t flags, hpcio_outbuf_t* outbuf) {
   ssize_t ret;
 
   const int bufSZ = sizeof(flags);
@@ -837,77 +673,62 @@ hpctrace_fmt_hdr_outbuf(hpctrace_hdr_flags_t flags, hpcio_outbuf_t* outbuf)
   return HPCFMT_OK;
 }
 
-
 // N.B.: not async safe
-int
-hpctrace_fmt_hdr_fwrite(hpctrace_hdr_flags_t flags, FILE* fs)
-{
+int hpctrace_fmt_hdr_fwrite(hpctrace_hdr_flags_t flags, FILE* fs) {
   int nw;
 
-  nw = fwrite(HPCTRACE_FMT_Magic,   1, HPCTRACE_FMT_MagicLen, fs);
-  if (nw != HPCTRACE_FMT_MagicLen) return HPCFMT_ERR;
+  nw = fwrite(HPCTRACE_FMT_Magic, 1, HPCTRACE_FMT_MagicLen, fs);
+  if (nw != HPCTRACE_FMT_MagicLen)
+    return HPCFMT_ERR;
 
   nw = fwrite(HPCTRACE_FMT_Version, 1, HPCTRACE_FMT_VersionLen, fs);
-  if (nw != HPCTRACE_FMT_VersionLen) return HPCFMT_ERR;
+  if (nw != HPCTRACE_FMT_VersionLen)
+    return HPCFMT_ERR;
 
-  nw = fwrite(HPCTRACE_FMT_Endian,  1, HPCTRACE_FMT_EndianLen, fs);
-  if (nw != HPCTRACE_FMT_EndianLen) return HPCFMT_ERR;
+  nw = fwrite(HPCTRACE_FMT_Endian, 1, HPCTRACE_FMT_EndianLen, fs);
+  if (nw != HPCTRACE_FMT_EndianLen)
+    return HPCFMT_ERR;
 
   HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(flags, fs));
 
   return HPCFMT_OK;
 }
 
-
-int
-hpctrace_fmt_hdr_fprint(hpctrace_fmt_hdr_t* hdr, FILE* fs)
-{
+int hpctrace_fmt_hdr_fprint(hpctrace_fmt_hdr_t* hdr, FILE* fs) {
   fprintf(fs, "%s\n", HPCTRACE_FMT_Magic);
 
   fprintf(fs, "[hdr:\n");
   fprintf(fs, "  (version: %s)\n", hdr->versionStr);
   fprintf(fs, "  (endian: %c)\n", hdr->endian);
-  fprintf(fs, "  (flags: 0x%"PRIx64")\n", hdr->flags);
+  fprintf(fs, "  (flags: 0x%" PRIx64 ")\n", hdr->flags);
   fprintf(fs, "]\n");
 
   return HPCFMT_OK;
 }
 
-
-//***************************************************************************
-// [hpctrace] datum (trace record)
-//***************************************************************************
-
-int
-hpctrace_fmt_datum_fread(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
-			 FILE* fs)
-{
+int hpctrace_fmt_datum_fread(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags, FILE* fs) {
   int ret = HPCFMT_OK;
-  
+
   ret = hpcfmt_int8_fread(&(x->comp), fs);
   if (ret != HPCFMT_OK) {
-    return ret; // can be HPCFMT_EOF
+    return ret;  // can be HPCFMT_EOF
   }
 
   HPCFMT_ThrowIfError(hpcfmt_int4_fread(&(x->cpId), fs));
 
   if (HPCTRACE_HDR_FLAGS_GET_BIT(flags, HPCTRACE_HDR_FLAGS_DATA_CENTRIC_BIT_POS)) {
     HPCFMT_ThrowIfError(hpcfmt_int4_fread(&(x->metricId), fs));
-  }
-  else {
+  } else {
     x->metricId = HPCTRACE_FMT_MetricId_NULL;
   }
 
   return HPCFMT_OK;
 }
 
-
 // Append the trace record to the outbuf.
 // Returns: HPCFMT_OK on success, else HPCFMT_ERR.
-int
-hpctrace_fmt_datum_outbuf(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
-			  hpcio_outbuf_t* outbuf)
-{
+int hpctrace_fmt_datum_outbuf(
+    hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags, hpcio_outbuf_t* outbuf) {
   const int bufSZ = sizeof(hpctrace_fmt_datum_t);
   unsigned char buf[bufSZ];
   int shift, k;
@@ -933,7 +754,7 @@ hpctrace_fmt_datum_outbuf(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
       k++;
     }
   }
-  
+
   if (hpcio_outbuf_write(outbuf, buf, k) != k) {
     return HPCFMT_ERR;
   }
@@ -941,11 +762,7 @@ hpctrace_fmt_datum_outbuf(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
   return HPCFMT_OK;
 }
 
-
-int
-hpctrace_fmt_datum_fwrite(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
-			  FILE* outfs)
-{
+int hpctrace_fmt_datum_fwrite(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags, FILE* outfs) {
   HPCFMT_ThrowIfError(hpcfmt_int8_fwrite(x->comp, outfs));
   HPCFMT_ThrowIfError(hpcfmt_int4_fwrite(x->cpId, outfs));
   if (HPCTRACE_HDR_FLAGS_GET_BIT(flags, HPCTRACE_HDR_FLAGS_DATA_CENTRIC_BIT_POS)) {
@@ -955,34 +772,19 @@ hpctrace_fmt_datum_fwrite(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
   return HPCFMT_OK;
 }
 
-
-int
-hpctrace_fmt_datum_fprint(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags,
-			  FILE* fs)
-{
+int hpctrace_fmt_datum_fprint(hpctrace_fmt_datum_t* x, hpctrace_hdr_flags_t flags, FILE* fs) {
   fprintf(fs, "(%llu, %u", HPCTRACE_FMT_GET_TIME(x->comp), x->cpId);
   if (HPCTRACE_HDR_FLAGS_GET_BIT(flags, HPCTRACE_HDR_FLAGS_LCA_RECORDED_BIT_POS)) {
-    fprintf(fs, ", %llu",  HPCTRACE_FMT_GET_DLCA(x->comp));
+    fprintf(fs, ", %llu", HPCTRACE_FMT_GET_DLCA(x->comp));
   }
   if (HPCTRACE_HDR_FLAGS_GET_BIT(flags, HPCTRACE_HDR_FLAGS_DATA_CENTRIC_BIT_POS)) {
-    fprintf(fs, ", %u",  x->metricId);
+    fprintf(fs, ", %u", x->metricId);
   }
   fputs(")\n", fs);
   return HPCFMT_OK;
 }
 
-
-//***************************************************************************
-// hpcprof-metricdb (located here for now)
-//***************************************************************************
-
-//***************************************************************************
-// [hpcprof-metricdb] hdr
-//***************************************************************************
-
-int
-hpcmetricDB_fmt_hdr_fread(hpcmetricDB_fmt_hdr_t* hdr, FILE* infs)
-{
+int hpcmetricDB_fmt_hdr_fread(hpcmetricDB_fmt_hdr_t* hdr, FILE* infs) {
   char tag[HPCMETRICDB_FMT_MagicLen + 1];
   char version[HPCMETRICDB_FMT_VersionLen + 1];
   char endian[HPCMETRICDB_FMT_EndianLen + 1];
@@ -1015,20 +817,20 @@ hpcmetricDB_fmt_hdr_fread(hpcmetricDB_fmt_hdr_t* hdr, FILE* infs)
   return HPCFMT_OK;
 }
 
-
-int
-hpcmetricDB_fmt_hdr_fwrite(hpcmetricDB_fmt_hdr_t* hdr, FILE* outfs)
-{
+int hpcmetricDB_fmt_hdr_fwrite(hpcmetricDB_fmt_hdr_t* hdr, FILE* outfs) {
   int nw;
 
-  nw = fwrite(HPCMETRICDB_FMT_Magic,   1, HPCMETRICDB_FMT_MagicLen, outfs);
-  if (nw != HPCTRACE_FMT_MagicLen) return HPCFMT_ERR;
+  nw = fwrite(HPCMETRICDB_FMT_Magic, 1, HPCMETRICDB_FMT_MagicLen, outfs);
+  if (nw != HPCTRACE_FMT_MagicLen)
+    return HPCFMT_ERR;
 
   nw = fwrite(HPCMETRICDB_FMT_Version, 1, HPCMETRICDB_FMT_VersionLen, outfs);
-  if (nw != HPCMETRICDB_FMT_VersionLen) return HPCFMT_ERR;
+  if (nw != HPCMETRICDB_FMT_VersionLen)
+    return HPCFMT_ERR;
 
-  nw = fwrite(HPCMETRICDB_FMT_Endian,  1, HPCMETRICDB_FMT_EndianLen, outfs);
-  if (nw != HPCMETRICDB_FMT_EndianLen) return HPCFMT_ERR;
+  nw = fwrite(HPCMETRICDB_FMT_Endian, 1, HPCMETRICDB_FMT_EndianLen, outfs);
+  if (nw != HPCMETRICDB_FMT_EndianLen)
+    return HPCFMT_ERR;
 
   HPCFMT_ThrowIfError(hpcfmt_int4_fwrite(hdr->numNodes, outfs));
   HPCFMT_ThrowIfError(hpcfmt_int4_fwrite(hdr->numMetrics, outfs));
@@ -1036,10 +838,7 @@ hpcmetricDB_fmt_hdr_fwrite(hpcmetricDB_fmt_hdr_t* hdr, FILE* outfs)
   return HPCFMT_OK;
 }
 
-
-int
-hpcmetricDB_fmt_hdr_fprint(hpcmetricDB_fmt_hdr_t* hdr, FILE* outfs)
-{
+int hpcmetricDB_fmt_hdr_fprint(hpcmetricDB_fmt_hdr_t* hdr, FILE* outfs) {
   fprintf(outfs, "%s\n", HPCMETRICDB_FMT_Magic);
   fprintf(outfs, "[hdr:...]\n");
 
@@ -1048,4 +847,3 @@ hpcmetricDB_fmt_hdr_fprint(hpcmetricDB_fmt_hdr_t* hdr, FILE* outfs)
 
   return HPCFMT_OK;
 }
-

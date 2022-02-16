@@ -46,14 +46,8 @@
 
 #include "sections.h"
 
-
-
-/******************************************************************************
- * global variables
- *****************************************************************************/
-
-const char *SECTION_SYMTAB = ".symtab";
-const char *SECTION_INIT   = ".init";
-const char *SECTION_FINI   = ".fini";
-const char *SECTION_TEXT   = ".text";
-const char *SECTION_PLT    = ".plt";
+const char* SECTION_SYMTAB = ".symtab";
+const char* SECTION_INIT = ".init";
+const char* SECTION_FINI = ".fini";
+const char* SECTION_TEXT = ".text";
+const char* SECTION_PLT = ".plt";

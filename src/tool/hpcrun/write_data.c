@@ -44,58 +44,34 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-//*****************************************************************************
-// system includes
-//*****************************************************************************
+#include "write_data.h"
 
+#include "backtrace.h"
+#include "cct/cct_bundle.h"
+#include "cct_bundle.h"
+#include "epoch.h"
+#include "files.h"
+#include "fname_max.h"
+#include "hpcrun_return_codes.h"
+#include "loadmap.h"
+#include "lush/lush-backtrace.h"
+#include "messages/messages.h"
+#include "rank.h"
+#include "sample_prob.h"
+#include "thread_data.h"
+
+#include "lib/prof-lean/hpcfmt.h"
+#include "lib/prof-lean/hpcio.h"
+#include "lib/prof-lean/hpcrun-fmt.h"
+#include "lib/support-lean/OSUtil.h"
+
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <setjmp.h>
 
-//*****************************************************************************
-// local includes
-//*****************************************************************************
-
-#include "fname_max.h"
-#include "backtrace.h"
-#include "files.h"
-#include "epoch.h"
-#include "rank.h"
-#include "thread_data.h"
-#include "cct_bundle.h"
-#include "hpcrun_return_codes.h"
-#include "write_data.h"
-#include "loadmap.h"
-#include "sample_prob.h"
-#include "cct/cct_bundle.h"
-
-#include <messages/messages.h>
-
-#include <lush/lush-backtrace.h>
-
-#include <lib/prof-lean/hpcio.h>
-#include <lib/prof-lean/hpcfmt.h>
-#include <lib/prof-lean/hpcrun-fmt.h>
-
-#include <lib/support-lean/OSUtil.h>
-
-
-//*****************************************************************************
-// structs and types
-//*****************************************************************************
-
-static epoch_flags_t epoch_flags = {
-  .bits = 0
-};
+static epoch_flags_t epoch_flags = {.bits = 0};
 
 static const uint64_t default_measurement_granularity = 1;
-
-
-
-//*****************************************************************************
-// local utilities
-//*****************************************************************************
-
 
 //***************************************************************************
 //
@@ -133,9 +109,7 @@ static const uint64_t default_measurement_granularity = 1;
 //
 //***************************************************************************
 
-static FILE *
-lazy_open_data_file(core_profile_trace_data_t * cptd)
-{
+static FILE* lazy_open_data_file(core_profile_trace_data_t* cptd) {
   FILE* fs = cptd->hpcrun_file;
   if (fs) {
     return fs;
@@ -153,10 +127,10 @@ lazy_open_data_file(core_profile_trace_data_t * cptd)
   }
   cptd->hpcrun_file = fs;
 
-  if (! hpcrun_sample_prob_active())
+  if (!hpcrun_sample_prob_active())
     return fs;
 
-  const uint bufSZ = 32; // sufficient to hold a 64-bit integer in base 10
+  const uint bufSZ = 32;  // sufficient to hold a 64-bit integer in base 10
 
   const char* jobIdStr = OSUtil_jobid();
   if (!jobIdStr) {
@@ -177,47 +151,38 @@ lazy_open_data_file(core_profile_trace_data_t * cptd)
   snprintf(pidStr, bufSZ, "%u", OSUtil_pid());
 
   char traceMinTimeStr[bufSZ];
-  snprintf(traceMinTimeStr, bufSZ, "%"PRIu64, cptd->trace_min_time_us);
+  snprintf(traceMinTimeStr, bufSZ, "%" PRIu64, cptd->trace_min_time_us);
 
   char traceMaxTimeStr[bufSZ];
-  snprintf(traceMaxTimeStr, bufSZ, "%"PRIu64, cptd->trace_max_time_us);
+  snprintf(traceMaxTimeStr, bufSZ, "%" PRIu64, cptd->trace_max_time_us);
 
   //
   // ==== file hdr =====
   //
 
-  TMSG(DATA_WRITE,"writing file header");
-  hpcrun_fmt_hdr_fwrite(fs,
-                        HPCRUN_FMT_NV_prog, hpcrun_files_executable_name(),
-                        HPCRUN_FMT_NV_progPath, hpcrun_files_executable_pathname(),
-			                  HPCRUN_FMT_NV_envPath, getenv("PATH"),
-                        HPCRUN_FMT_NV_jobId, jobIdStr,
-                        HPCRUN_FMT_NV_mpiRank, mpiRankStr,
-                        HPCRUN_FMT_NV_tid, tidStr,
-                        HPCRUN_FMT_NV_hostid, hostidStr,
-                        HPCRUN_FMT_NV_pid, pidStr,
-                        HPCRUN_FMT_NV_traceMinTime, traceMinTimeStr,
-                        HPCRUN_FMT_NV_traceMaxTime, traceMaxTimeStr,
-                        HPCRUN_FMT_NV_traceOrdered, cptd->traceOrdered?"1":"0",
-                        NULL);
+  TMSG(DATA_WRITE, "writing file header");
+  hpcrun_fmt_hdr_fwrite(
+      fs, HPCRUN_FMT_NV_prog, hpcrun_files_executable_name(), HPCRUN_FMT_NV_progPath,
+      hpcrun_files_executable_pathname(), HPCRUN_FMT_NV_envPath, getenv("PATH"),
+      HPCRUN_FMT_NV_jobId, jobIdStr, HPCRUN_FMT_NV_mpiRank, mpiRankStr, HPCRUN_FMT_NV_tid, tidStr,
+      HPCRUN_FMT_NV_hostid, hostidStr, HPCRUN_FMT_NV_pid, pidStr, HPCRUN_FMT_NV_traceMinTime,
+      traceMinTimeStr, HPCRUN_FMT_NV_traceMaxTime, traceMaxTimeStr, HPCRUN_FMT_NV_traceOrdered,
+      cptd->traceOrdered ? "1" : "0", NULL);
   return fs;
 }
 
-
-static int
-write_epochs(FILE* fs, core_profile_trace_data_t * cptd, epoch_t* epoch)
-{
+static int write_epochs(FILE* fs, core_profile_trace_data_t* cptd, epoch_t* epoch) {
   uint32_t num_epochs = 0;
 
-  if (! hpcrun_sample_prob_active())
+  if (!hpcrun_sample_prob_active())
     return HPCRUN_OK;
 
   //
-  // === # epochs === 
+  // === # epochs ===
   //
 
   epoch_t* current_epoch = epoch;
-  for(epoch_t* s = current_epoch; s; s = s->next) {
+  for (epoch_t* s = current_epoch; s; s = s->next) {
     num_epochs++;
   }
 
@@ -229,8 +194,7 @@ write_epochs(FILE* fs, core_profile_trace_data_t * cptd, epoch_t* epoch)
   // for each epoch ...
   //
 
-  for(epoch_t* s = current_epoch; s; s = s->next) {
-
+  for (epoch_t* s = current_epoch; s; s = s->next) {
 #if 0
     if (ENABLED(SKIP_WRITE_EMPTY_EPOCH)){
       if (hpcrun_empty_cct_bundle(&(s->csdata))){
@@ -243,26 +207,25 @@ write_epochs(FILE* fs, core_profile_trace_data_t * cptd, epoch_t* epoch)
     //  == epoch header ==
     //
 
-    TMSG(DATA_WRITE," epoch header");
+    TMSG(DATA_WRITE, " epoch header");
     //
     // set epoch flags before writing
     //
 
     epoch_flags.fields.isLogicalUnwind = hpcrun_isLogicalUnwind();
-    TMSG(LUSH,"epoch lush flag set to %s", epoch_flags.fields.isLogicalUnwind ? "true" : "false");
-    
-    TMSG(DATA_WRITE,"epoch flags = %"PRIx64"", epoch_flags.bits);
-    hpcrun_fmt_epochHdr_fwrite(fs, epoch_flags,
-			       default_measurement_granularity,
-			       "TODO:epoch-name","TODO:epoch-value",
-			       NULL);
+    TMSG(LUSH, "epoch lush flag set to %s", epoch_flags.fields.isLogicalUnwind ? "true" : "false");
+
+    TMSG(DATA_WRITE, "epoch flags = %" PRIx64 "", epoch_flags.bits);
+    hpcrun_fmt_epochHdr_fwrite(
+        fs, epoch_flags, default_measurement_granularity, "TODO:epoch-name", "TODO:epoch-value",
+        NULL);
 
     //
     // == metrics ==
     //
 
-    kind_info_t *curr = NULL;
-    metric_desc_p_tbl_t *metric_tbl = hpcrun_get_metric_tbl(&curr);
+    kind_info_t* curr = NULL;
+    metric_desc_p_tbl_t* metric_tbl = hpcrun_get_metric_tbl(&curr);
 
     hpcfmt_int4_fwrite(hpcrun_get_num_kind_metrics(), fs);
     while (curr != NULL) {
@@ -280,12 +243,11 @@ write_epochs(FILE* fs, core_profile_trace_data_t * cptd, epoch_t* epoch)
     TMSG(DATA_WRITE, "Preparing to write loadmap");
 
     hpcrun_loadmap_t* current_loadmap = s->loadmap;
-    
+
     hpcfmt_int4_fwrite(current_loadmap->size, fs);
 
     // N.B.: Write in reverse order to obtain nicely ascending LM ids.
-    for (load_module_t* lm_src = current_loadmap->lm_end;
-	 (lm_src); lm_src = lm_src->prev) {
+    for (load_module_t* lm_src = current_loadmap->lm_end; (lm_src); lm_src = lm_src->prev) {
       loadmap_entry_t lm_entry;
       lm_entry.id = lm_src->id;
       lm_entry.name = lm_src->name;
@@ -299,30 +261,25 @@ write_epochs(FILE* fs, core_profile_trace_data_t * cptd, epoch_t* epoch)
     // == cct ==
     //
 
-    cct_bundle_t* cct      = &(s->csdata);
+    cct_bundle_t* cct = &(s->csdata);
     int ret = hpcrun_cct_bundle_fwrite(fs, epoch_flags, cct, cptd->cct2metrics_map);
-    if(ret != HPCRUN_OK) {
+    if (ret != HPCRUN_OK) {
       TMSG(DATA_WRITE, "Error writing tree %#lx", cct);
       TMSG(DATA_WRITE, "Number of tree nodes lost: %ld", cct->num_nodes);
       EMSG("could not save profile data to hpcrun file");
       perror("write_profile_data");
-      ret = HPCRUN_ERR; // FIXME: return this value now
-    }
-    else {
+      ret = HPCRUN_ERR;  // FIXME: return this value now
+    } else {
       TMSG(DATA_WRITE, "saved profile data to hpcrun file ");
     }
     current_loadmap++;
-
-  } // epoch loop
+  }  // epoch loop
 
   return HPCRUN_OK;
 }
 
-
-void
-hpcrun_flush_epochs(core_profile_trace_data_t * cptd)
-{
-  FILE *fs = lazy_open_data_file(cptd);
+void hpcrun_flush_epochs(core_profile_trace_data_t* cptd) {
+  FILE* fs = lazy_open_data_file(cptd);
   if (fs == NULL)
     return;
 
@@ -330,21 +287,20 @@ hpcrun_flush_epochs(core_profile_trace_data_t * cptd)
   hpcrun_epoch_reset();
 }
 
-int
-hpcrun_write_profile_data(core_profile_trace_data_t * cptd)
-{
-  if(cptd->scale_fn) cptd->scale_fn((void*)cptd);
+int hpcrun_write_profile_data(core_profile_trace_data_t* cptd) {
+  if (cptd->scale_fn)
+    cptd->scale_fn((void*)cptd);
 
-  TMSG(DATA_WRITE,"Writing hpcrun profile data");
+  TMSG(DATA_WRITE, "Writing hpcrun profile data");
   FILE* fs = lazy_open_data_file(cptd);
   if (fs == NULL)
     return HPCRUN_ERR;
 
   write_epochs(fs, cptd, cptd->epoch);
 
-  TMSG(DATA_WRITE,"closing file");
+  TMSG(DATA_WRITE, "closing file");
   hpcio_fclose(fs);
-  TMSG(DATA_WRITE,"Done!");
+  TMSG(DATA_WRITE, "Done!");
 
   return HPCRUN_OK;
 }
@@ -352,8 +308,6 @@ hpcrun_write_profile_data(core_profile_trace_data_t * cptd)
 //
 // DEBUG: fetch and print current loadmap
 //
-void
-hpcrun_dbg_print_current_loadmap(void)
-{
+void hpcrun_dbg_print_current_loadmap(void) {
   hpcrun_loadmap_print(hpcrun_get_thread_epoch()->loadmap);
 }

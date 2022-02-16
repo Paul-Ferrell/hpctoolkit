@@ -44,20 +44,8 @@
 #ifndef rocm_binary_processing_h
 #define rocm_binary_processing_h
 
-//******************************************************************************
-// local includes
-//******************************************************************************
-
 #include "hpcrun/utilities/ip-normalized.h"
 
-//******************************************************************************
-// interface operations
-//******************************************************************************
-
-ip_normalized_t
-rocm_binary_function_lookup
-(
-  const char* kernel_name
-);
+ip_normalized_t rocm_binary_function_lookup(const char* kernel_name);
 
 #endif

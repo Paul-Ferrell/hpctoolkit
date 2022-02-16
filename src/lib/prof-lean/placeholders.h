@@ -44,14 +44,9 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-
 #ifndef _HPCTOOLKIT_PLACEHOLDERS_H_
 #define _HPCTOOLKIT_PLACEHOLDERS_H_
 
-//*****************************************************************************
-// interface operations 
-//*****************************************************************************
-
-void *canonicalize_placeholder(void *routine);
+void* canonicalize_placeholder(void* routine);
 
 #endif

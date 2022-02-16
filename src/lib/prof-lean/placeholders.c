@@ -44,17 +44,7 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-//*****************************************************************************
-// global includes 
-//*****************************************************************************
-
 #include <hpctoolkit-config.h>
-
-
-
-//*****************************************************************************
-// macros 
-//*****************************************************************************
 
 // When a kernel sample is attached below a CCT node, we don't want to
 // turn a CCT leaf into an interior node because, at present, interior
@@ -70,24 +60,15 @@
 // routine, use the routine address + 2 so that if a kernel sample is
 // hung below the placeholder, the interior node will still map to the
 // right placeholder.
-#define ADJUST_PLACEHOLDER_PC(x) (((char *)x) + 1)
+#define ADJUST_PLACEHOLDER_PC(x) (((char*)x) + 1)
 
-
-
-//*****************************************************************************
-// interface operations 
-//*****************************************************************************
-
-void *
-canonicalize_placeholder(void *routine)
-{
+void* canonicalize_placeholder(void* routine) {
 #if defined(HOST_BIG_ENDIAN) && defined(HOST_CPU_PPC)
-    // with the PPC 64-bit ABI on big-endian systems, functions are
-    // represented by D symbols and require one level of indirection
-    void *routine_addr = *(void**) routine;
+  // with the PPC 64-bit ABI on big-endian systems, functions are
+  // represented by D symbols and require one level of indirection
+  void* routine_addr = *(void**)routine;
 #else
-    void *routine_addr = (void *) routine;
+  void* routine_addr = (void*)routine;
 #endif
-    return ADJUST_PLACEHOLDER_PC(routine_addr);
+  return ADJUST_PLACEHOLDER_PC(routine_addr);
 }
-

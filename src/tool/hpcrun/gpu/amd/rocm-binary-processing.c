@@ -41,35 +41,24 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-//******************************************************************************
-// system includes
-//******************************************************************************
-
-#include <gelf.h>
-#include <errno.h>     // errno
-#include <fcntl.h>     // open
-#include <sys/stat.h>  // mkdir
-#include <sys/types.h>
-#include <unistd.h>
-#include <linux/limits.h>  // PATH_MAX
-
-//******************************************************************************
-// local includes
-//******************************************************************************
-
-#include <include/gpu-binary.h>
+#include "rocm-binary-processing.h"
 
 #include "rocm-debug-api.h"
-#include "rocm-binary-processing.h"
-#include <hpcrun/files.h>
-#include <hpcrun/memory/hpcrun-malloc.h>
+
+#include "hpcrun/files.h"
+#include "hpcrun/memory/hpcrun-malloc.h"
+
+#include "include/gpu-binary.h"
 #include "lib/prof-lean/elf-helper.h"
 
-#include <monitor.h> // enable and disable threads
-
-//******************************************************************************
-// type declarations
-//******************************************************************************
+#include <errno.h>  // errno
+#include <fcntl.h>  // open
+#include <gelf.h>
+#include <linux/limits.h>  // PATH_MAX
+#include <monitor.h>       // enable and disable threads
+#include <sys/stat.h>      // mkdir
+#include <sys/types.h>
+#include <unistd.h>
 
 typedef struct amd_function_table {
   size_t size;
@@ -90,15 +79,7 @@ typedef struct amd_gpu_binary {
 
 #include "hpcrun/gpu/gpu-print.h"
 
-//******************************************************************************
-// local variables
-//******************************************************************************
-
 amd_gpu_binary_t* binary_list = NULL;
-
-//******************************************************************************
-// private operations
-//******************************************************************************
 
 // TODO:
 // construct_amd_gpu_symbols parses the ELF symbol and extract
@@ -112,34 +93,31 @@ amd_gpu_binary_t* binary_list = NULL;
 // It would be good to refactor these ELF operations into commond
 // code.
 
-static void
-construct_amd_gpu_symbols
-(
-  Elf *elf,
-  amd_function_table_t * ft
-)
-{
+static void construct_amd_gpu_symbols(Elf* elf, amd_function_table_t* ft) {
   // Initialize elf_help_t to handle extended numbering
   elf_helper_t eh;
   elf_helper_initialize(elf, &eh);
 
   // Get section name section index to find ".strtab"
   size_t shstrndx;
-  if (elf_getshdrstrndx(elf, &shstrndx) != 0) return;
+  if (elf_getshdrstrndx(elf, &shstrndx) != 0)
+    return;
 
   // Find .symtab and .strtab sections
-  Elf_Scn *scn = NULL;
-  Elf_Scn *symtab_scn = NULL;
-  Elf_Scn *strtab_scn = NULL;
+  Elf_Scn* scn = NULL;
+  Elf_Scn* symtab_scn = NULL;
+  Elf_Scn* strtab_scn = NULL;
   while ((scn = elf_nextscn(elf, scn)) != NULL) {
     GElf_Shdr shdr;
-    if (!gelf_getshdr(scn, &shdr)) continue;
+    if (!gelf_getshdr(scn, &shdr))
+      continue;
     if (shdr.sh_type == SHT_SYMTAB) {
       symtab_scn = scn;
       continue;
     }
-    char *name = elf_strptr(elf, shstrndx , shdr.sh_name);
-    if (name == NULL) continue;
+    char* name = elf_strptr(elf, shstrndx, shdr.sh_name);
+    if (name == NULL)
+      continue;
     if (strcmp(name, ".strtab") == 0) {
       strtab_scn = scn;
     }
@@ -150,34 +128,39 @@ construct_amd_gpu_symbols
   gelf_getshdr(symtab_scn, &symtab);
 
   int nsymbols = 0;
-  if (symtab.sh_entsize > 0) { // avoid divide by 0
+  if (symtab.sh_entsize > 0) {  // avoid divide by 0
     nsymbols = symtab.sh_size / symtab.sh_entsize;
-    if (nsymbols <= 0) return;
+    if (nsymbols <= 0)
+      return;
   } else {
     return;
   }
 
-  Elf_Data *symtab_data = elf_getdata(symtab_scn, NULL);
-  if (symtab_data == NULL) return;
+  Elf_Data* symtab_data = elf_getdata(symtab_scn, NULL);
+  if (symtab_data == NULL)
+    return;
 
   // Get total number of function symbols in .symtab
   size_t nfuncs = 0;
   for (int i = 0; i < nsymbols; i++) {
     GElf_Sym sym;
-    GElf_Sym *symp = NULL;
+    GElf_Sym* symp = NULL;
     int section_index;
     symp = elf_helper_get_symbol(&eh, i, &sym, &section_index);
-    if (symp) { // symbol properly read
+    if (symp) {  // symbol properly read
       int symtype = GELF_ST_TYPE(sym.st_info);
-      if (sym.st_shndx == SHN_UNDEF) continue;
-      if (symtype != STT_FUNC) continue;
+      if (sym.st_shndx == SHN_UNDEF)
+        continue;
+      if (symtype != STT_FUNC)
+        continue;
       nfuncs++;
     }
   }
 
   // Get symbol name string table
-  Elf_Data *strtab_data = elf_getdata(strtab_scn, NULL);
-  if (strtab_data == NULL) return;
+  Elf_Data* strtab_data = elf_getdata(strtab_scn, NULL);
+  if (strtab_data == NULL)
+    return;
   char* symbol_name_buf = (char*)(strtab_data->d_buf);
 
   // Initialize our function table
@@ -189,13 +172,15 @@ construct_amd_gpu_symbols
   // Put each function symbol into our function table
   for (int i = 0; i < nsymbols; i++) {
     GElf_Sym sym;
-    GElf_Sym *symp = NULL;
+    GElf_Sym* symp = NULL;
     int section_index;
     symp = elf_helper_get_symbol(&eh, i, &sym, &section_index);
-    if (symp) { // symbol properly read
+    if (symp) {  // symbol properly read
       int symtype = GELF_ST_TYPE(sym.st_info);
-      if (sym.st_shndx == SHN_UNDEF) continue;
-      if (symtype != STT_FUNC) continue;
+      if (sym.st_shndx == SHN_UNDEF)
+        continue;
+      if (symtype != STT_FUNC)
+        continue;
       ft->names[index] = symbol_name_buf + sym.st_name;
       ft->addrs[index] = sym.st_value;
       ++index;
@@ -210,19 +195,15 @@ construct_amd_gpu_symbols
 }
 
 // TODO:
-// Eventually, we want to write the URI into our load map rather than copying the binary into a file.
-// To handle this long-term goal, the URI parsing would have to be code shared by hpcrun, hpcprof,
-// and hpcstruct. We can move function parse_amd_gpu_binary_uri to prof-lean direcotry and refactor
-// the function to return something that can help identifies the GPU binary specified by the URI.
+// Eventually, we want to write the URI into our load map rather than copying the binary into a
+// file. To handle this long-term goal, the URI parsing would have to be code shared by hpcrun,
+// hpcprof, and hpcstruct. We can move function parse_amd_gpu_binary_uri to prof-lean direcotry and
+// refactor the function to return something that can help identifies the GPU binary specified by
+// the URI.
 
-static void
-parse_amd_gpu_binary_uri
-(
-  char *uri,
-  amd_gpu_binary_t *bin
-)
-{
-  // File URI example: file:///home/users/coe0173/HIP-Examples/HIP-Examples-Applications/FloydWarshall/FloydWarshall#offset=26589&size=31088
+static void parse_amd_gpu_binary_uri(char* uri, amd_gpu_binary_t* bin) {
+  // File URI example:
+  // file:///home/users/coe0173/HIP-Examples/HIP-Examples-Applications/FloydWarshall/FloydWarshall#offset=26589&size=31088
   char* filepath = uri + strlen("file://");
   char* filepath_end = filepath;
 
@@ -252,18 +233,17 @@ parse_amd_gpu_binary_uri
   used += sprintf(&gpu_file_path[used], "%s", hpcrun_files_output_directory());
   used += sprintf(&gpu_file_path[used], "%s", "/" GPU_BINARY_DIRECTORY "/");
   mkdir(gpu_file_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-  used += sprintf(&gpu_file_path[used], "%s.%llx" GPU_BINARY_SUFFIX,
-		  filename, offset);
+  used += sprintf(&gpu_file_path[used], "%s.%llx" GPU_BINARY_SUFFIX, filename, offset);
 
   int rfd = open(filepath, O_RDONLY);
   if (rfd < 0) {
     PRINT("\tcannot open the file specified in the file URI\n");
-	return;
+    return;
   }
 
   if (lseek(rfd, offset, SEEK_SET) < 0) {
     PRINT("\tcannot seek to the offset\n");
-	return;
+    return;
   }
 
   bin->size = size;
@@ -285,27 +265,25 @@ parse_amd_gpu_binary_uri
       // This could happen if running out of disk quota
       int error = errno;
       close(wfd);
-      hpcrun_abort("hpctoolkit: unable to write AMD GPU binary file %s: %s", gpu_file_path, strerror(error));
+      hpcrun_abort(
+          "hpctoolkit: unable to write AMD GPU binary file %s: %s", gpu_file_path, strerror(error));
     }
     close(wfd);
   } else {
     // We tolerate an existing file.
     // Otherwise, fatal error
     if (errno != EEXIST) {
-      hpcrun_abort("hpctoolkit: unable to create AMD GPU binary file %s: %s", gpu_file_path, strerror(errno));
+      hpcrun_abort(
+          "hpctoolkit: unable to create AMD GPU binary file %s: %s", gpu_file_path,
+          strerror(errno));
     }
   }
 
   bin->amd_gpu_module_id = hpcrun_loadModule_add(gpu_file_path);
 }
 
-static int
-file_uri_exists
-(
-  char* uri
-)
-{
-  for (amd_gpu_binary_t * bin = binary_list; bin != NULL; bin = bin->next) {
+static int file_uri_exists(char* uri) {
+  for (amd_gpu_binary_t* bin = binary_list; bin != NULL; bin = bin->next) {
     if (strcmp(uri, bin->uri) == 0) {
       return 1;
     }
@@ -313,12 +291,7 @@ file_uri_exists
   return 0;
 }
 
-static int
-parse_amd_gpu_binary
-(
-  void
-)
-{
+static int parse_amd_gpu_binary(void) {
   // rocm debug api library creates a new thread through std::thread.
   // This breaks automatic thread ignoring code because we only check
   // the caller of pthread_create. So, we manually ignore the new thread.
@@ -334,10 +307,11 @@ parse_amd_gpu_binary
 
     // Handle file URIs
     if (strncmp(uri, "file://", strlen("file://")) == 0) {
-      if (file_uri_exists(uri)) continue;
+      if (file_uri_exists(uri))
+        continue;
 
       // Handle a new AMD GPU binary
-      amd_gpu_binary_t* bin = (amd_gpu_binary_t*) malloc(sizeof(amd_gpu_binary_t));
+      amd_gpu_binary_t* bin = (amd_gpu_binary_t*)malloc(sizeof(amd_gpu_binary_t));
       bin->uri = strdup(uri);
       bin->next = binary_list;
       binary_list = bin;
@@ -347,7 +321,7 @@ parse_amd_gpu_binary
 
       // Parse the ELF symbol table
       elf_version(EV_CURRENT);
-      Elf *elf = elf_memory(bin->buf, bin->size);
+      Elf* elf = elf_memory(bin->buf, bin->size);
       if (elf != 0) {
         construct_amd_gpu_symbols(elf, &(bin->function_table));
         elf_end(elf);
@@ -374,12 +348,7 @@ parse_amd_gpu_binary
 // to handle large GPU binaries. We will need to use more efficient
 // lookup data structure, a splay tree or a trie.
 
-static ip_normalized_t
-lookup_amd_function
-(
-  const char *kernel_name
-)
-{
+static ip_normalized_t lookup_amd_function(const char* kernel_name) {
   ip_normalized_t nip;
   nip.lm_id = 0;
   nip.lm_ip = 0;
@@ -397,16 +366,7 @@ lookup_amd_function
   return nip;
 }
 
-//******************************************************************************
-// interface operations
-//******************************************************************************
-
-ip_normalized_t
-rocm_binary_function_lookup
-(
-  const char* kernel_name
-)
-{
+ip_normalized_t rocm_binary_function_lookup(const char* kernel_name) {
   // TODO:
   // 1. Handle multi-threaded case. Currently, this function is called when the first
   //    HIP kernel launch is done. So multiple threads can enter this concurrently.

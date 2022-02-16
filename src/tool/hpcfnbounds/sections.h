@@ -47,10 +47,10 @@
 #ifndef __section_h__
 #define __section_h__
 
-extern const char *SECTION_SYMTAB;
-extern const char *SECTION_INIT;
-extern const char *SECTION_FINI;
-extern const char *SECTION_PLT;
-extern const char *SECTION_TEXT;
+extern const char* SECTION_SYMTAB;
+extern const char* SECTION_INIT;
+extern const char* SECTION_FINI;
+extern const char* SECTION_PLT;
+extern const char* SECTION_TEXT;
 
 #endif

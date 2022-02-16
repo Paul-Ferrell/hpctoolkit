@@ -57,35 +57,18 @@
 //
 //***************************************************************************
 
-//************************* System Include Files ****************************
-
-//*************************** User Include Files ****************************
-
 #include "LoadMap.hpp"
 
-#include "Struct-Tree.hpp" // TODO: Prof::Struct::Tree::UnknownLMNm
+#include "Struct-Tree.hpp"  // TODO: Prof::Struct::Tree::UnknownLMNm
 
-#include <lib/binutils/LM.hpp>
-
-#include <lib/support/diagnostics.h>
-
-
-//*************************** Forward Declarations ***************************
-
-//****************************************************************************
-
-
-//****************************************************************************
-// LoadMap
-//****************************************************************************
+#include "lib/binutils/LM.hpp"
+#include "lib/support/diagnostics.h"
 
 #define HASH_LEN 32
 
 namespace Prof {
 
-
-LoadMap::LoadMap(uint sz)
-{
+LoadMap::LoadMap(uint sz) {
   m_lm_byId.reserve(sz);
 
   LM* nullLM = new LM(Prof::Struct::Tree::UnknownLMNm);
@@ -93,9 +76,7 @@ LoadMap::LoadMap(uint sz)
   DIAG_Assert(nullLM->id() == LoadMap::LMId_NULL, "LoadMap::LoadMap");
 }
 
-
-LoadMap::~LoadMap()
-{
+LoadMap::~LoadMap() {
   for (LMId_t i = LoadMap::LMId_NULL; i <= size(); ++i) {
     LoadMap::LM* lm = this->lm(i);
     delete lm;
@@ -104,22 +85,15 @@ LoadMap::~LoadMap()
   m_lm_byName.clear();
 }
 
-
-void
-LoadMap::lm_insert(LoadMap::LM* x)
-{
+void LoadMap::lm_insert(LoadMap::LM* x) {
   m_lm_byId.push_back(x);
-  x->id(m_lm_byId.size() - 1); // id is the last slot used
- 
+  x->id(m_lm_byId.size() - 1);  // id is the last slot used
+
   std::pair<LMSet_nm::iterator, bool> ret = m_lm_byName.insert(x);
-  DIAG_Assert(ret.second, "LoadMap::lm_insert(): conflict inserting: "
-	      << x->toString());
+  DIAG_Assert(ret.second, "LoadMap::lm_insert(): conflict inserting: " << x->toString());
 }
 
-
-LoadMap::LMSet_nm::iterator
-LoadMap::lm_find(const std::string& nm) const
-{
+LoadMap::LMSet_nm::iterator LoadMap::lm_find(const std::string& nm) const {
   static LoadMap::LM key;
   key.name(nm);
 
@@ -127,18 +101,14 @@ LoadMap::lm_find(const std::string& nm) const
   return fnd;
 }
 
+std::vector<LoadMap::MergeEffect>* LoadMap::merge(const LoadMap& y) {
+  std::vector<LoadMap::MergeEffect>* mrgEffect = new std::vector<LoadMap::MergeEffect>;
 
-std::vector<LoadMap::MergeEffect>*
-LoadMap::merge(const LoadMap& y)
-{
-  std::vector<LoadMap::MergeEffect>* mrgEffect =
-    new std::vector<LoadMap::MergeEffect>;
-  
   LoadMap& x = *this;
 
   for (LMId_t i = LoadMap::LMId_NULL; i <= y.size(); ++i) {
     LoadMap::LM* y_lm = y.lm(i);
-    
+
     LMSet_nm::iterator x_fnd = x.lm_find(y_lm->name());
     LoadMap::LM* x_lm = (x_fnd != x.lm_end_nm()) ? *x_fnd : NULL;
 
@@ -153,26 +123,20 @@ LoadMap::merge(const LoadMap& y)
       // y_lm->id() is replaced by x_lm->id()
       mrgEffect->push_back(LoadMap::MergeEffect(y_lm->id(), x_lm->id()));
     }
-    
+
     x_lm->isUsedMrg(y_lm->isUsed());
   }
-  
+
   return mrgEffect;
 }
 
-
-std::string
-LoadMap::toString() const
-{
+std::string LoadMap::toString() const {
   std::ostringstream os;
   dump(os);
   return os.str();
 }
 
-
-void
-LoadMap::dump(std::ostream& os) const
-{
+void LoadMap::dump(std::ostream& os) const {
   std::string pre = "  ";
 
   os << "{ Prof::LoadMap\n";
@@ -183,75 +147,49 @@ LoadMap::dump(std::ostream& os) const
   os << "}\n";
 }
 
-
-void
-LoadMap::ddump() const
-{
+void LoadMap::ddump() const {
   dump(std::cerr);
 }
 
+LoadMap::LM::LM(const std::string& name) : m_id(LMId_NULL), m_name(name), m_isUsed(false) {}
 
-//****************************************************************************
-// LoadMap::LM
-//****************************************************************************
+LoadMap::LM::~LM() {}
 
-LoadMap::LM::LM(const std::string& name)
-  : m_id(LMId_NULL), m_name(name), m_isUsed(false)
-{
-}
-
-
-LoadMap::LM::~LM()
-{
-}
-
-
-std::string
-LoadMap::LM::toString() const
-{
+std::string LoadMap::LM::toString() const {
   std::ostringstream os;
   dump(os);
   return os.str();
 }
 
-
-void
-LoadMap::LM::dump(std::ostream& os) const
-{
+void LoadMap::LM::dump(std::ostream& os) const {
   os << m_id << ": " << m_name;
 }
 
-
-void
-LoadMap::LM::ddump() const
-{
+void LoadMap::LM::ddump() const {
   dump(std::cerr);
 }
 
-
-const std::string&
-LoadMap::LM::pretty_name(const std::string& lm_nm)
-{
+const std::string& LoadMap::LM::pretty_name(const std::string& lm_nm) {
   static const std::string vdso_nm("[vdso]");
 
   static const std::string vmlinux_nm("<vmlinux");
   static const std::string vmlinux_pretty_nm("[vmlinux]");
 
-  if (lm_nm.find(vdso_nm) != std::string::npos) return vdso_nm;
-  if (lm_nm.find(vmlinux_nm) != std::string::npos) return vmlinux_pretty_nm;
+  if (lm_nm.find(vdso_nm) != std::string::npos)
+    return vdso_nm;
+  if (lm_nm.find(vmlinux_nm) != std::string::npos)
+    return vmlinux_pretty_nm;
 
   return lm_nm;
 }
 
-std::string
-LoadMap::LM::pretty_file_name(const std::string& name)
-{
+std::string LoadMap::LM::pretty_file_name(const std::string& name) {
   static const std::string vdso_suffix(".[vdso]");
   size_t pos = name.find(vdso_suffix);
-  if (pos == std::string::npos) return name;
+  if (pos == std::string::npos)
+    return name;
   std::string new_name = name;
   new_name.replace(pos - HASH_LEN, HASH_LEN + vdso_suffix.size(), "vdso");
   return new_name;
 }
-
-} // namespace Prof
+}  // namespace Prof

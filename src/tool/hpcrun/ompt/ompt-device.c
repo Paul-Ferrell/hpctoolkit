@@ -2,7 +2,7 @@
 
 // * BeginRiceCopyright *****************************************************
 //
-// $HeadURL$ 
+// $HeadURL$
 // $Id$
 //
 // --------------------------------------------------------------------------
@@ -44,46 +44,27 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-
 #include "ompt-device.h"
 
 #if HAVE_CUPTI_H
 
-/******************************************************************************
- * global include files
- *****************************************************************************/
-
-#include <sys/param.h>
-
-
-
-//*****************************************************************************
-// local includes
-//*****************************************************************************
-
-#include <hpcrun/safe-sampling.h>
-#include <hpcrun/thread_data.h>
-#include <hpcrun/device-finalizers.h>
-#include <hpcrun/sample_event.h>
-#include <hpcrun/utilities/hpcrun-nanotime.h>
-
-#include "ompt-interface.h"
-#include "ompt-device-map.h"
-#include "ompt-placeholders.h"
-
-#include "gpu/gpu-op-placeholders.h"
-#include "gpu/gpu-correlation-channel.h"
 #include "gpu/gpu-correlation-channel-set.h"
+#include "gpu/gpu-correlation-channel.h"
 #include "gpu/gpu-monitoring.h"
-
+#include "gpu/gpu-op-placeholders.h"
 #include "gpu/nvidia/cupti-api.h"
+#include "ompt-device-map.h"
+#include "ompt-interface.h"
+#include "ompt-placeholders.h"
 #include "sample-sources/nvidia.h"
 
+#include "hpcrun/device-finalizers.h"
+#include "hpcrun/safe-sampling.h"
+#include "hpcrun/sample_event.h"
+#include "hpcrun/thread_data.h"
+#include "hpcrun/utilities/hpcrun-nanotime.h"
 
-
-//*****************************************************************************
-// macros
-//*****************************************************************************
+#include <sys/param.h>
 
 #define OMPT_ACTIVITY_DEBUG 0
 
@@ -95,85 +76,43 @@
 
 #define OMPT_API_FNTYPE(fn) fn##_t
 
-#define OMPT_API_FUNCTION(return_type, fn, args)  \
-  typedef return_type (*OMPT_API_FNTYPE(fn)) args
+#define OMPT_API_FUNCTION(return_type, fn, args) typedef return_type(*OMPT_API_FNTYPE(fn)) args
 
-#define OMPT_TARGET_API_FUNCTION(return_type, fn, args)  \
-  OMPT_API_FUNCTION(return_type, fn, args) 
+#define OMPT_TARGET_API_FUNCTION(return_type, fn, args) OMPT_API_FUNCTION(return_type, fn, args)
 
-#define FOREACH_OMPT_TARGET_FN(macro) \
-  macro(ompt_get_device_time) \
-  macro(ompt_translate_time) \
-  macro(ompt_set_trace_native) \
-  macro(ompt_start_trace) \
-  macro(ompt_pause_trace) \
-  macro(ompt_stop_trace) \
-  macro(ompt_get_record_type) \
-  macro(ompt_get_record_native) \
-  macro(ompt_get_record_abstract) \
-  macro(ompt_advance_buffer_cursor) \
-  macro(ompt_set_pc_sampling) \
-  macro(ompt_set_external_subscriber)
+#define FOREACH_OMPT_TARGET_FN(macro)                                                 \
+  macro(ompt_get_device_time) macro(ompt_translate_time) macro(ompt_set_trace_native) \
+      macro(ompt_start_trace) macro(ompt_pause_trace) macro(ompt_stop_trace)          \
+          macro(ompt_get_record_type) macro(ompt_get_record_native)                   \
+              macro(ompt_get_record_abstract) macro(ompt_advance_buffer_cursor)       \
+                  macro(ompt_set_pc_sampling) macro(ompt_set_external_subscriber)
 
+OMPT_TARGET_API_FUNCTION(void, ompt_set_external_subscriber, (int enable));
 
-
-//*****************************************************************************
-// types 
-//*****************************************************************************
-
-OMPT_TARGET_API_FUNCTION(void, ompt_set_external_subscriber, 
-(
- int enable
-));
-
-
-OMPT_TARGET_API_FUNCTION(void, ompt_set_pc_sampling, 
-(
- ompt_device_t *device,
- int enable,
- int pc_sampling_frequency
-));
-
-
-//*****************************************************************************
-// static variables
-//*****************************************************************************
+OMPT_TARGET_API_FUNCTION(
+    void, ompt_set_pc_sampling, (ompt_device_t * device, int enable, int pc_sampling_frequency));
 
 static bool ompt_pc_sampling_enabled = false;
 
 static device_finalizer_fn_entry_t device_finalizer;
 
-
 //------------------------------------------------
 // declare function pointers for target functions
 //------------------------------------------------
 
-#define ompt_decl_name(fn) \
-  fn ## _t  fn;
+#define ompt_decl_name(fn) fn##_t fn;
 
 FOREACH_OMPT_TARGET_FN(ompt_decl_name)
 
 #undef ompt_decl_name
 
-
-//*****************************************************************************
-// thread-local variables
-//*****************************************************************************
-
-static __thread cct_node_t *target_node = NULL;
-static __thread cct_node_t *trace_node = NULL;
+static __thread cct_node_t* target_node = NULL;
+static __thread cct_node_t* trace_node = NULL;
 
 static __thread bool ompt_runtime_api_flag = false;
 
-//*****************************************************************************
-// device operations
-//*****************************************************************************
-
-static void
-hpcrun_ompt_op_id_notify(ompt_scope_endpoint_t endpoint,
-                         ompt_id_t host_op_id,
-                         ip_normalized_t ip_norm)
-{
+static void hpcrun_ompt_op_id_notify(
+    ompt_scope_endpoint_t endpoint, ompt_id_t host_op_id, ip_normalized_t ip_norm) {
   // A runtime API must be implemented by driver APIs.
   if (endpoint == ompt_scope_begin) {
     // Enter a ompt runtime api
@@ -189,7 +128,7 @@ hpcrun_ompt_op_id_notify(ompt_scope_endpoint_t endpoint,
     cct_addr_t frm;
     memset(&frm, 0, sizeof(cct_addr_t));
     frm.ip_norm = ip_norm;
-    cct_node_t *api_node = hpcrun_cct_insert_addr(target_node, &frm);
+    cct_node_t* api_node = hpcrun_cct_insert_addr(target_node, &frm);
 
     gpu_op_ccts_insert(api_node, &gpu_op_ccts, gpu_op_placeholder_flags_all);
 
@@ -213,45 +152,25 @@ hpcrun_ompt_op_id_notify(ompt_scope_endpoint_t endpoint,
   return;
 }
 
-
-void 
-ompt_bind_names(ompt_function_lookup_t lookup)
-{
-#define ompt_bind_name(fn) \
-  fn = (fn ## _t ) lookup(#fn);
+void ompt_bind_names(ompt_function_lookup_t lookup) {
+#define ompt_bind_name(fn) fn = (fn##_t)lookup(#fn);
 
   FOREACH_OMPT_TARGET_FN(ompt_bind_name)
 
 #undef ompt_bind_name
 }
 
-
 #define BUFFER_SIZE (1024 * 1024 * 8)
 
-void 
-ompt_callback_buffer_request
-(
- int device_id,
- ompt_buffer_t **buffer,
- size_t *bytes
-)
-{
+void ompt_callback_buffer_request(int device_id, ompt_buffer_t** buffer, size_t* bytes) {
   *bytes = BUFFER_SIZE;
-  *buffer = (ompt_buffer_t *)malloc(*bytes);
+  *buffer = (ompt_buffer_t*)malloc(*bytes);
   assert(buffer);
 }
 
-
-void 
-ompt_callback_buffer_complete
-(
- int device_id,
- ompt_buffer_t *buffer,
- size_t bytes,
- ompt_buffer_cursor_t begin,
- int buffer_owned
-)
-{
+void ompt_callback_buffer_complete(
+    int device_id, ompt_buffer_t* buffer, size_t bytes, ompt_buffer_cursor_t begin,
+    int buffer_owned) {
   // handle notifications
   gpu_correlation_channel_set_consume();
 
@@ -260,30 +179,21 @@ ompt_callback_buffer_complete
   int status = 0;
   do {
     // TODO(keren): replace cupti_activity_handle with device_activity handle
-    CUpti_Activity *activity = (CUpti_Activity *)next;
+    CUpti_Activity* activity = (CUpti_Activity*)next;
     cupti_activity_process(activity);
-    status = cupti_buffer_cursor_advance(buffer, bytes, (CUpti_Activity **)&next);
-  } while(status);
+    status = cupti_buffer_cursor_advance(buffer, bytes, (CUpti_Activity**)&next);
+  } while (status);
 }
 
-
-void
-ompt_pc_sampling_enable()
-{
+void ompt_pc_sampling_enable() {
   ompt_pc_sampling_enabled = true;
 }
 
-
-void
-ompt_pc_sampling_disable()
-{
+void ompt_pc_sampling_disable() {
   ompt_pc_sampling_enabled = false;
 }
 
-
-void
-ompt_trace_configure(ompt_device_t *device)
-{
+void ompt_trace_configure(ompt_device_t* device) {
   int flags = 0;
 
   // specify desired monitoring
@@ -299,7 +209,7 @@ ompt_trace_configure(ompt_device_t *device)
 
   // indicate desired monitoring
   ompt_set_trace_native(device, 1, flags);
-  
+
   // set pc sampling after other traces
   if (ompt_pc_sampling_enabled) {
     int freq_bits = gpu_monitoring_instruction_sample_frequency_get();
@@ -310,76 +220,40 @@ ompt_trace_configure(ompt_device_t *device)
   ompt_start_trace(device, ompt_callback_buffer_request, ompt_callback_buffer_complete);
 }
 
-
-void
-ompt_device_initialize(uint64_t device_num,
-                       const char *type,
-                       ompt_device_t *device,
-                       ompt_function_lookup_t lookup,
-                       const char *documentation)
-{
+void ompt_device_initialize(
+    uint64_t device_num, const char* type, ompt_device_t* device, ompt_function_lookup_t lookup,
+    const char* documentation) {
   PRINT("ompt_device_initialize->%s, %" PRIu64 "\n", type, device_num);
 
   ompt_bind_names(lookup);
 
-  //ompt_trace_configure(device);
+  // ompt_trace_configure(device);
 
   ompt_device_map_insert(device_num, device, type);
 }
 
+void ompt_device_finalize(uint64_t device_num) {}
 
-void 
-ompt_device_finalize(uint64_t device_num)
-{
-}
-
-
-void 
-ompt_device_load(uint64_t device_num,
-                 const char *filename,
-                 int64_t file_offset,
-                 const void *file_addr,
-                 size_t bytes,
-                 const void *host_addr,
-                 const void *device_addr,
-                 uint64_t module_id)
-{
+void ompt_device_load(
+    uint64_t device_num, const char* filename, int64_t file_offset, const void* file_addr,
+    size_t bytes, const void* host_addr, const void* device_addr, uint64_t module_id) {
   PRINT("ompt_device_load->%s, %" PRIu64 "\n", filename, device_num);
   cupti_load_callback_cuda(module_id, host_addr, bytes);
 }
 
-
-void 
-ompt_device_unload(uint64_t device_num,
-                   uint64_t module_id)
-{
-  //cubin_id_map_delete(module_id);
+void ompt_device_unload(uint64_t device_num, uint64_t module_id) {
+  // cubin_id_map_delete(module_id);
 }
 
-
-static int 
-get_load_module
-(
-  cct_node_t *node
-)
-{
-  cct_addr_t *addr = hpcrun_cct_addr(target_node); 
+static int get_load_module(cct_node_t* node) {
+  cct_addr_t* addr = hpcrun_cct_addr(target_node);
   ip_normalized_t ip = addr->ip_norm;
   return ip.lm_id;
 }
 
-
-void 
-ompt_target_callback
-(
-  ompt_target_t kind,
-  ompt_scope_endpoint_t endpoint,
-  uint64_t device_num,
-  ompt_data_t *task_data,
-  ompt_id_t target_id,
-  const void *codeptr_ra
-)
-{
+void ompt_target_callback(
+    ompt_target_t kind, ompt_scope_endpoint_t endpoint, uint64_t device_num, ompt_data_t* task_data,
+    ompt_id_t target_id, const void* codeptr_ra) {
   PRINT("ompt_target_callback->target_id %" PRIu64 "\n", target_id);
 
   if (endpoint == ompt_scope_end) {
@@ -390,129 +264,87 @@ ompt_target_callback
   // XXX(Keren): Do not use openmp callbacks to consume and produce records
   // HPCToolkit always subscribes its own cupti callback
   //
-  //cupti_stop_flag_set();
-  //cupti_correlation_channel_init();
-  //cupti_activity_channel_init();
-  //cupti_correlation_channel_consume();
+  // cupti_stop_flag_set();
+  // cupti_correlation_channel_init();
+  // cupti_activity_channel_init();
+  // cupti_correlation_channel_consume();
 
   // sample a record
   hpcrun_metricVal_t zero_metric_incr = {.i = 0};
-  int zero_metric_id = 0; // nothing to see here
+  int zero_metric_id = 0;  // nothing to see here
 
   ucontext_t uc;
   getcontext(&uc);
-  thread_data_t *td = hpcrun_get_thread_data();
+  thread_data_t* td = hpcrun_get_thread_data();
   td->overhead++;
   // NOTE(keren): hpcrun_safe_enter prevent self interruption
   hpcrun_safe_enter();
-  
-  int skip_this_frame = 1; // omit this procedure frame on the call path
-  target_node = 
-    hpcrun_sample_callpath(&uc, zero_metric_id, zero_metric_incr, 
-                           skip_this_frame, 1, NULL).sample_node; 
+
+  int skip_this_frame = 1;  // omit this procedure frame on the call path
+  target_node =
+      hpcrun_sample_callpath(&uc, zero_metric_id, zero_metric_incr, skip_this_frame, 1, NULL)
+          .sample_node;
 
   // the load module for the runtime library that supports offloading
-  int lm = get_load_module(target_node); 
+  int lm = get_load_module(target_node);
 
-  // drop nodes on the call chain until we find one that is not in the load 
+  // drop nodes on the call chain until we find one that is not in the load
   // module for runtime library that supports offloading
-  for (;;) { 
+  for (;;) {
     target_node = hpcrun_cct_parent(target_node);
-    if (get_load_module(target_node) != lm) break;
+    if (get_load_module(target_node) != lm)
+      break;
   }
 
   hpcrun_safe_exit();
   td->overhead--;
 }
 
-#define FOREACH_OMPT_DATA_OP(macro)				     \
-  macro(op, ompt_target_data_alloc, ompt_tgt_alloc)		     \
-  macro(op, ompt_target_data_delete, ompt_tgt_delete)		     \
-  macro(op, ompt_target_data_transfer_to_device, ompt_tgt_copyin)    \
-  macro(op, ompt_target_data_transfer_from_device, ompt_tgt_copyout) 
+#define FOREACH_OMPT_DATA_OP(macro)                                       \
+  macro(op, ompt_target_data_alloc, ompt_tgt_alloc)                       \
+      macro(op, ompt_target_data_delete, ompt_tgt_delete)                 \
+          macro(op, ompt_target_data_transfer_to_device, ompt_tgt_copyin) \
+              macro(op, ompt_target_data_transfer_from_device, ompt_tgt_copyout)
 
-void
-ompt_data_op_callback
-(
- ompt_scope_endpoint_t endpoint,
- ompt_id_t target_id,
- ompt_id_t host_op_id,
- ompt_target_data_op_t optype,
- void *src_addr,
- int src_device_num,
- void *dest_addr,
- int dest_device_num,
- size_t bytes,
- const void *codeptr_ra
-)
-{
+void ompt_data_op_callback(
+    ompt_scope_endpoint_t endpoint, ompt_id_t target_id, ompt_id_t host_op_id,
+    ompt_target_data_op_t optype, void* src_addr, int src_device_num, void* dest_addr,
+    int dest_device_num, size_t bytes, const void* codeptr_ra) {
   ompt_placeholder_t op = ompt_placeholders.ompt_tgt_none;
-  switch (optype) {                       
+  switch (optype) {
 #define ompt_op_macro(op, ompt_op_type, ompt_op_class) \
-    case ompt_op_type:                                 \
-      op = ompt_placeholders.ompt_op_class;                              \
-      break;
-    
+  case ompt_op_type: op = ompt_placeholders.ompt_op_class; break;
+
     FOREACH_OMPT_DATA_OP(ompt_op_macro);
 
 #undef ompt_op_macro
-    default:
-      break;
+  default: break;
   }
 
   hpcrun_ompt_op_id_notify(endpoint, host_op_id, op.pc_norm);
 }
 
-
-void
-ompt_submit_callback
-(
- ompt_scope_endpoint_t endpoint,
- ompt_id_t target_id,
- ompt_id_t host_op_id,
- unsigned int requested_num_teams
-)
-{
+void ompt_submit_callback(
+    ompt_scope_endpoint_t endpoint, ompt_id_t target_id, ompt_id_t host_op_id,
+    unsigned int requested_num_teams) {
   PRINT("ompt_submit_callback enter->target_id %" PRIu64 "\n", target_id);
   hpcrun_ompt_op_id_notify(endpoint, host_op_id, ompt_placeholders.ompt_tgt_kernel.pc_norm);
   PRINT("ompt_submit_callback exit->target_id %" PRIu64 "\n", target_id);
 }
 
+void ompt_map_callback(
+    ompt_id_t target_id, unsigned int nitems, void** host_addr, void** device_addr, size_t* bytes,
+    unsigned int* mapping_flags) {}
 
-void
-ompt_map_callback(ompt_id_t target_id,
-                  unsigned int nitems,
-                  void **host_addr,
-                  void **device_addr,
-                  size_t *bytes,
-                  unsigned int *mapping_flags)
-{
-}
-
-
-bool
-ompt_runtime_status_get
-(
- void
-)
-{
+bool ompt_runtime_status_get(void) {
   return ompt_runtime_api_flag;
 }
 
-
-cct_node_t *
-ompt_trace_node_get
-(
- void
-)
-{
+cct_node_t* ompt_trace_node_get(void) {
   return trace_node;
 }
 
-
-void
-prepare_device()
-{
+void prepare_device() {
   PRINT("ompt_initialize->prepare_device enter\n");
 
   device_finalizer.fn = cupti_device_flush;

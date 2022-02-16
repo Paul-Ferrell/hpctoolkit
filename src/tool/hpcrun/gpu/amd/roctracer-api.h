@@ -44,41 +44,12 @@
 #ifndef roctracer_api_h
 #define roctracer_api_h
 
+void roctracer_init(void);
 
+void roctracer_flush(void* args, int how);
 
-//******************************************************************************
-// interface operations
-//******************************************************************************
+void roctracer_fini(void* args, int how);
 
-void
-roctracer_init
-(
- void
-);
-
-
-void
-roctracer_flush
-(
- void *args,
- int how
-);
-
-
-void
-roctracer_fini
-(
- void *args,
- int how
-);
-
-
-int
-roctracer_bind
-(
-  void
-);
-
-
+int roctracer_bind(void);
 
 #endif

@@ -57,48 +57,31 @@
 //
 //***************************************************************************
 
-#ifndef Analysis_Raw_Raw_hpp 
+#ifndef Analysis_Raw_Raw_hpp
 #define Analysis_Raw_Raw_hpp
 
-//************************* System Include Files ****************************
+#include "include/uint.h"
 
 #include <string>
-
-//*************************** User Include Files ****************************
-
-#include <include/uint.h> 
-
-//*************************** Forward Declarations ***************************
-
-//****************************************************************************
 
 namespace Analysis {
 
 namespace Raw {
 
-void 
-writeAsText(/*destination,*/ const char* filenm);
+void writeAsText(/*destination,*/ const char* filenm);
 
-static inline void 
-writeAsText(/*destination,*/ const std::string& filenm)
-{ writeAsText(filenm.c_str()); }
+static inline void writeAsText(/*destination,*/ const std::string& filenm) {
+  writeAsText(filenm.c_str());
+}
 
-void
-writeAsText_callpath(/*destination,*/ const char* filenm);
+void writeAsText_callpath(/*destination,*/ const char* filenm);
 
-void
-writeAsText_callpathMetricDB(/*destination,*/ const char* filenm);
+void writeAsText_callpathMetricDB(/*destination,*/ const char* filenm);
 
-void
-writeAsText_callpathTrace(/*destination,*/ const char* filenm);
+void writeAsText_callpathTrace(/*destination,*/ const char* filenm);
 
-void
-writeAsText_flat(/*destination,*/ const char* filenm);
+void writeAsText_flat(/*destination,*/ const char* filenm);
+}  // namespace Raw
+}  // namespace Analysis
 
-} // namespace Raw
-
-} // namespace Analysis
-
-//****************************************************************************
-
-#endif // Analysis_Raw_Raw_hpp
+#endif  // Analysis_Raw_Raw_hpp

@@ -44,64 +44,28 @@
 //
 // ******************************************************* EndRiceCopyright *
 
+#include "ompt-placeholders.h"
 
-//***************************************************************************
-// system includes 
-//***************************************************************************
+#include "hpcrun/fnbounds/fnbounds_interface.h"
+#include "hpcrun/hpcrun-initializers.h"
+#include "hpcrun/safe-sampling.h"
+
+#include "lib/prof-lean/placeholders.h"
 
 #include <assert.h>
 
-
-
-//***************************************************************************
-// local includes 
-//***************************************************************************
-
-#include <lib/prof-lean/placeholders.h>
-
-#include <hpcrun/fnbounds/fnbounds_interface.h>
-#include <hpcrun/safe-sampling.h>
-#include <hpcrun/hpcrun-initializers.h>
-
-#include "ompt-placeholders.h"
-
-
-
-//***************************************************************************
-// macros
-//***************************************************************************
-
-
 #define initialize_placeholder(f)               \
   {                                             \
-    void * fn = (void *) f;			\
+    void* fn = (void*)f;                        \
     init_placeholder(&ompt_placeholders.f, fn); \
   }
 
-#define declare_placeholder_function(fn)	\
-  void fn(void) { }
-
-
-
-//***************************************************************************
-// global variables 
-//***************************************************************************
+#define declare_placeholder_function(fn) \
+  void fn(void) {}
 
 ompt_placeholders_t ompt_placeholders;
 
-
-
-//***************************************************************************
-// local variables 
-//***************************************************************************
-
 static closure_t ompt_placeholder_init_closure;
-
-
-
-//***************************************************************************
-// placeholder functions
-//***************************************************************************
 
 //----------------------------------------------------------------------------
 // Definitions of placeholder functions used to represent an OpenMP
@@ -119,45 +83,21 @@ static closure_t ompt_placeholder_init_closure;
 
 FOREACH_OMPT_PLACEHOLDER_FN(declare_placeholder_function)
 
-
-
-//***************************************************************************
-// private operations
-//***************************************************************************
-
-static load_module_t *
-pc_to_lm
-(
-  void *pc
-)
-{
+static load_module_t* pc_to_lm(void* pc) {
   void *func_start_pc, *func_end_pc;
-  load_module_t *lm = NULL;
+  load_module_t* lm = NULL;
   fnbounds_enclosing_addr(pc, &func_start_pc, &func_end_pc, &lm);
   return lm;
 }
 
-
-static void 
-init_placeholder
-(
-  ompt_placeholder_t *p, 
-  void *pc
-)
-{
+static void init_placeholder(ompt_placeholder_t* p, void* pc) {
   p->pc = canonicalize_placeholder(pc);
   p->pc_norm = hpcrun_normalize_ip(p->pc, pc_to_lm(p->pc));
 }
 
-
-static void
-ompt_init_placeholders_internal
-(
- void *arg
-)
-{
-  // protect against receiving a sample here. if we do, we may get 
-  // deadlock trying to acquire a lock associated with 
+static void ompt_init_placeholders_internal(void* arg) {
+  // protect against receiving a sample here. if we do, we may get
+  // deadlock trying to acquire a lock associated with
   // fnbounds_enclosing_addr
   hpcrun_safe_enter();
 
@@ -166,22 +106,12 @@ ompt_init_placeholders_internal
   hpcrun_safe_exit();
 }
 
-
-//***************************************************************************
-// interface operations
-//***************************************************************************
-
 // placeholders can only be initialized after fnbounds module is initialized.
-// for this reason, defer placeholder initialization until the end of 
+// for this reason, defer placeholder initialization until the end of
 // hpcrun initialization.
-void
-ompt_init_placeholders
-(
-  void
-)
-{
+void ompt_init_placeholders(void) {
   // initialize closure for initializer
-  ompt_placeholder_init_closure.fn = ompt_init_placeholders_internal; 
+  ompt_placeholder_init_closure.fn = ompt_init_placeholders_internal;
   ompt_placeholder_init_closure.arg = 0;
 
   // register closure

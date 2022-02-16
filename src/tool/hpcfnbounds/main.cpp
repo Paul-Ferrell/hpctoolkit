@@ -44,66 +44,43 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-//*****************************************************************************
-// system includes
-//*****************************************************************************
-
-#include <vector>
-#include <string>
-
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 #define __STDC_FORMAT_MACROS
-#include <inttypes.h>
+#include "include/hpctoolkit-config.h"
 
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
-
-#include <include/hpctoolkit-config.h>
 
 #ifdef ENABLE_OPENMP_SYMTAB
 #include <omp.h>
 #endif
 
-
-//*****************************************************************************
-// local includes
-//*****************************************************************************
-
-#include <lib/prof-lean/vdso.h>
-
 #include "code-ranges.h"
 #include "eh-frames.h"
-#include "process-ranges.h"
 #include "function-entries.h"
+#include "process-ranges.h"
 #include "sections.h"
 #include "server.h"
-#include "syserv-mesg.h"
-#include "Symtab.h"
 #include "Symbol.h"
+#include "Symtab.h"
+#include "syserv-mesg.h"
 
-
-//*****************************************************************************
-// namespaces
-//*****************************************************************************
+#include "lib/prof-lean/vdso.h"
 
 using namespace Dyninst;
 using namespace SymtabAPI;
-
 using namespace std;
-
-
-
-//*****************************************************************************
-// macros
-//*****************************************************************************
 
 #define PATHSCALE_EXCEPTION_HANDLER_PREFIX "Handler."
 #define USE_PATHSCALE_SYMBOL_FILTER
@@ -111,43 +88,29 @@ using namespace std;
 
 #define STRLEN(s) (sizeof(s) - 1)
 
-//*****************************************************************************
-// forward declarations
-//*****************************************************************************
-
-static void usage(char *command, int status);
+static void usage(char* command, int status);
 static void setup_segv_handler(void);
-
-//*****************************************************************************
-// local variables
-//*****************************************************************************
 
 // output is text mode unless C or server mode is specified.
 
 enum { MODE_TEXT = 1, MODE_C, MODE_SERVER };
 static int the_mode = MODE_TEXT;
 
-static bool verbose = false; // additional verbosity
+static bool verbose = false;  // additional verbosity
 
-static jmp_buf segv_recover; // handle longjmp "restart" from segv
-
-//*****************************************************************
-// interface operations
-//*****************************************************************
+static jmp_buf segv_recover;  // handle longjmp "restart" from segv
 
 // Now write one format (C or text) to stdout, or else binary format
 // over a pipe in server mode.  No output directory.
 
-int 
-main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
   DiscoverFnTy fn_discovery = DiscoverFnTy_Aggressive;
-  char *object_file;
+  char* object_file;
   int n, fdin, fdout;
   int jobs = 1;
 
   // num threads may be specified via environ or -js arg
-  char *str = getenv("HPCFNBOUNDS_NUM_THREADS");
+  char* str = getenv("HPCFNBOUNDS_NUM_THREADS");
   if (str != NULL) {
     jobs = atoi(str);
   }
@@ -155,52 +118,44 @@ main(int argc, char* argv[])
   for (n = 1; n < argc; n++) {
     if (strcmp(argv[n], "-c") == 0) {
       the_mode = MODE_C;
-    }
-    else if (strcmp(argv[n], "-d") == 0) {
+    } else if (strcmp(argv[n], "-d") == 0) {
       fn_discovery = DiscoverFnTy_Conservative;
-    }
-    else if (strcmp(argv[n], "-h") == 0 || strcmp(argv[n], "--help") == 0) {
+    } else if (strcmp(argv[n], "-h") == 0 || strcmp(argv[n], "--help") == 0) {
       usage(argv[0], 0);
-    }
-    else if (strcmp(argv[n], "-js") == 0) {
-      if (argc < n + 2 || sscanf(argv[n+1], "%d", &jobs) < 1 || jobs < 1) {
-	fprintf(stderr, "hpcfnbounds: bad or missing number of threads for -js\n");
-	usage(argv[0], 1);
+    } else if (strcmp(argv[n], "-js") == 0) {
+      if (argc < n + 2 || sscanf(argv[n + 1], "%d", &jobs) < 1 || jobs < 1) {
+        fprintf(stderr, "hpcfnbounds: bad or missing number of threads for -js\n");
+        usage(argv[0], 1);
       }
       n += 1;
-    }
-    else if (strcmp(argv[n], "-s") == 0) {
+    } else if (strcmp(argv[n], "-s") == 0) {
       the_mode = MODE_SERVER;
-      if (argc < n + 3 || sscanf(argv[n+1], "%d", &fdin) < 1
-	  || sscanf(argv[n+2], "%d", &fdout) < 1) {
-	fprintf(stderr, "%s: missing file descriptors for server mode\n",
-		argv[0]);
-	exit(1);
+      if (argc < n + 3 || sscanf(argv[n + 1], "%d", &fdin) < 1
+          || sscanf(argv[n + 2], "%d", &fdout) < 1) {
+        fprintf(stderr, "%s: missing file descriptors for server mode\n", argv[0]);
+        exit(1);
       }
       n += 2;
-    }
-    else if (strcmp(argv[n], "-t") == 0) {
+    } else if (strcmp(argv[n], "-t") == 0) {
       the_mode = MODE_TEXT;
-    }
-    else if (strcmp(argv[n], "-v") == 0) {
+    } else if (strcmp(argv[n], "-v") == 0) {
       verbose = true;
-    }
-    else if (strcmp(argv[n], "--") == 0) {
+    } else if (strcmp(argv[n], "--") == 0) {
       n++;
       break;
-    }
-    else if (strncmp(argv[n], "-", 1) == 0) {
+    } else if (strncmp(argv[n], "-", 1) == 0) {
       fprintf(stderr, "%s: unknown option: %s\n", argv[0], argv[n]);
       usage(argv[0], 1);
-    }
-    else {
+    } else {
       break;
     }
   }
 
   // If symtab supports openmp, then set num threads.
 #ifdef ENABLE_OPENMP_SYMTAB
-  if (jobs < 1) { jobs = 1; }
+  if (jobs < 1) {
+    jobs = 1;
+  }
   omp_set_num_threads(jobs);
 #endif
 
@@ -217,13 +172,12 @@ main(int argc, char* argv[])
   object_file = argv[n];
 
   setup_segv_handler();
-  if ( ! setjmp(segv_recover) ) {
+  if (!setjmp(segv_recover)) {
     dump_file_info(object_file, fn_discovery);
-  }
-  else {
-    fprintf(stderr,
-	    "!!! INTERNAL hpcfnbounds-bin error !!!\n"
-	    "argument string = ");
+  } else {
+    fprintf(
+        stderr, "!!! INTERNAL hpcfnbounds-bin error !!!\n"
+                "argument string = ");
     for (int i = 0; i < argc; i++)
       fprintf(stderr, "%s ", argv[i]);
     fprintf(stderr, "\n");
@@ -231,75 +185,52 @@ main(int argc, char* argv[])
   return 0;
 }
 
-int
-c_mode(void)
-{
+int c_mode(void) {
   return the_mode == MODE_C;
 }
 
-int
-server_mode(void)
-{
+int server_mode(void) {
   return the_mode == MODE_SERVER;
 }
 
-bool
-verbose_mode(void)
-{
+bool verbose_mode(void) {
   return verbose;
 }
-
 
 extern "C" {
 
 // we don't care about demangled names. define
 // a no-op that meets symtabAPI semantic needs only
-char *
-cplus_demangle(char *s, int opts)
-{
-return strdup(s);
+char* cplus_demangle(char* s, int opts) {
+  return strdup(s);
 }
 };
 
-
 // Callback from dwarf_eh_frame_info() in eh-frames.cpp.
-void
-add_frame_addr(void * addr)
-{
+void add_frame_addr(void* addr) {
   add_function_entry(addr, NULL, false, 0);
 }
 
-
-//*****************************************************************
-// private operations
-//*****************************************************************
-
-static void 
-usage(char *command, int status)
-{
-  fprintf(stderr, 
-    "Usage: hpcfnbounds [options] object-file\n\n"
-    "\t-c\twrite output in C source code\n"
-    "\t-d\tdon't perform function discovery on stripped code\n"
-    "\t-h\tprint this help message and exit\n"
-    "\t-js num \trun with num threads in symtab (default 1)\n"
-    "\t-s fdin fdout\trun in server mode\n"
-    "\t-t\twrite output in text format (default)\n"
-    "\t-v\tverbose mode for fnbounds server\n\n"
-    "If no format is specified, then text mode is used.\n");
+static void usage(char* command, int status) {
+  fprintf(
+      stderr, "Usage: hpcfnbounds [options] object-file\n\n"
+              "\t-c\twrite output in C source code\n"
+              "\t-d\tdon't perform function discovery on stripped code\n"
+              "\t-h\tprint this help message and exit\n"
+              "\t-js num \trun with num threads in symtab (default 1)\n"
+              "\t-s fdin fdout\trun in server mode\n"
+              "\t-t\twrite output in text format (default)\n"
+              "\t-v\tverbose mode for fnbounds server\n\n"
+              "If no format is specified, then text mode is used.\n");
 
   exit(status);
 }
 
-static void
-segv_handler(int sig)
-{
+static void segv_handler(int sig) {
   longjmp(segv_recover, 1);
 }
 
-static void
-setup_segv_handler(void)
-{
+static void setup_segv_handler(void) {
 #if 0
   const struct sigaction segv_action= {
     .sa_handler = segv_handler,
@@ -308,117 +239,94 @@ setup_segv_handler(void)
 #endif
   struct sigaction segv_action;
   segv_action.sa_handler = segv_handler;
-  segv_action.sa_flags   = 0;
+  segv_action.sa_flags = 0;
   sigemptyset(&segv_action.sa_mask);
 
   sigaction(SIGSEGV, &segv_action, NULL);
 }
 
-
-static bool 
-matches_prefix(string s, const char *pre, int n)
-{
-  const char *sc = s.c_str();
+static bool matches_prefix(string s, const char* pre, int n) {
+  const char* sc = s.c_str();
   return strncmp(sc, pre, n) == 0;
 }
 
 #ifdef __PPC64__
-static bool 
-matches_contains(string s, const char *substring)
-{
-  const char *sc = s.c_str();
+static bool matches_contains(string s, const char* substring) {
+  const char* sc = s.c_str();
   return strstr(sc, substring) != 0;
 }
 #endif
 
-static bool 
-pathscale_filter(Symbol *sym)
-{
+static bool pathscale_filter(Symbol* sym) {
   bool result = false;
   // filter out function symbols for exception handlers
-  if (matches_prefix(sym->getMangledName(), 
-		     PATHSCALE_EXCEPTION_HANDLER_PREFIX, 
-		     STRLEN(PATHSCALE_EXCEPTION_HANDLER_PREFIX))) 
+  if (matches_prefix(
+          sym->getMangledName(), PATHSCALE_EXCEPTION_HANDLER_PREFIX,
+          STRLEN(PATHSCALE_EXCEPTION_HANDLER_PREFIX)))
     result = true;
   return result;
 }
 
-
-static bool 
-report_symbol(Symbol *sym)
-{
+static bool report_symbol(Symbol* sym) {
 #ifdef USE_PATHSCALE_SYMBOL_FILTER
-  if (pathscale_filter(sym)) return false;
+  if (pathscale_filter(sym))
+    return false;
 #endif
   return true;
 }
 
-
-static string * 
-code_range_comment(string &name, string section, const char *which)
-{
-  name = which; 
+static string* code_range_comment(string& name, string section, const char* which) {
+  name = which;
   name = name + " " + section + " section";
   return &name;
 }
 
-
-static void
-note_code_range(const char *sname, Region *s, DiscoverFnTy discover)
-{
-  char *start = (char *) s->getDiskOffset();
-  char *end = start + s->getDiskSize();
-  long offset = (long) s->getPtrToRawData() - (long) start;
+static void note_code_range(const char* sname, Region* s, DiscoverFnTy discover) {
+  char* start = (char*)s->getDiskOffset();
+  char* end = start + s->getDiskSize();
+  long offset = (long)s->getPtrToRawData() - (long)start;
   string ntmp;
   new_code_range(sname, start, end, offset, discover);
 
-  add_function_entry(start, code_range_comment(ntmp, s->getRegionName(), "start"), true /* global */);
+  add_function_entry(
+      start, code_range_comment(ntmp, s->getRegionName(), "start"), true /* global */);
   add_function_entry(end, code_range_comment(ntmp, s->getRegionName(), "end"), true /* global */);
 }
 
-
-static void
-note_section(Symtab *syms, const char *sname, DiscoverFnTy discover)
-{
-  Region *s;
-  if (syms->findRegion(s, sname) && s) 
+static void note_section(Symtab* syms, const char* sname, DiscoverFnTy discover) {
+  Region* s;
+  if (syms->findRegion(s, sname) && s)
     note_code_range(sname, s, discover);
 }
 
-
-static void
-note_code_ranges(Symtab *syms, DiscoverFnTy fn_discovery)
-{
-  //TODO: instead of just considering specific segments below
-  //      perhaps we should consider all segments marked executable.
-  //      binaries could include "bonus" segments we don't
-  //      know about explicitly as having code within.
+static void note_code_ranges(Symtab* syms, DiscoverFnTy fn_discovery) {
+  // TODO: instead of just considering specific segments below
+  //       perhaps we should consider all segments marked executable.
+  //       binaries could include "bonus" segments we don't
+  //       know about explicitly as having code within.
   note_section(syms, SECTION_INIT, fn_discovery);
-  note_section(syms, SECTION_PLT,  DiscoverFnTy_Aggressive);
+  note_section(syms, SECTION_PLT, DiscoverFnTy_Aggressive);
   note_section(syms, SECTION_TEXT, fn_discovery);
   note_section(syms, SECTION_FINI, fn_discovery);
 }
 
-
-static void 
-dump_symbols(int dwarf_fd, Symtab *syms, vector<Symbol *> &symvec, DiscoverFnTy fn_discovery)
-{
+static void
+dump_symbols(int dwarf_fd, Symtab* syms, vector<Symbol*>& symvec, DiscoverFnTy fn_discovery) {
   note_code_ranges(syms, fn_discovery);
 
   //-----------------------------------------------------------------
   // collect function start addresses and pair them with a comment
-  // that indicates what function (or functions) map to that start 
+  // that indicates what function (or functions) map to that start
   // address. enter them into a data structure for reachable function
   // processing
   //-----------------------------------------------------------------
   for (unsigned int i = 0; i < symvec.size(); i++) {
-    Symbol *s = symvec[i];
+    Symbol* s = symvec[i];
     Symbol::SymbolLinkage sl = s->getLinkage();
     if (report_symbol(s) && s->getOffset() != 0) {
       string mname = s->getMangledName();
-      add_function_entry((void *) s->getOffset(), &mname,
-			 ((sl & Symbol::SL_GLOBAL) ||
-			  (sl & Symbol::SL_WEAK)));
+      add_function_entry(
+          (void*)s->getOffset(), &mname, ((sl & Symbol::SL_GLOBAL) || (sl & Symbol::SL_WEAK)));
     }
   }
 
@@ -427,16 +335,13 @@ dump_symbols(int dwarf_fd, Symtab *syms, vector<Symbol *> &symvec, DiscoverFnTy 
   process_code_ranges();
 
   //-----------------------------------------------------------------
-  // dump the address and comment for each function  
+  // dump the address and comment for each function
   //-----------------------------------------------------------------
   dump_reachable_functions();
 }
 
-
-static void 
-dump_file_symbols(int dwarf_fd, Symtab *syms, vector<Symbol *> &symvec,
-		  DiscoverFnTy fn_discovery)
-{
+static void
+dump_file_symbols(int dwarf_fd, Symtab* syms, vector<Symbol*>& symvec, DiscoverFnTy fn_discovery) {
   if (c_mode()) {
     printf("unsigned long hpcrun_nm_addrs[] = {\n");
   }
@@ -448,119 +353,110 @@ dump_file_symbols(int dwarf_fd, Symtab *syms, vector<Symbol *> &symvec,
   }
 }
 
-
 // We call it "header", even though it comes at end of file.
 //
-static void
-dump_header_info(int is_relocatable, uintptr_t ref_offset)
-{
+static void dump_header_info(int is_relocatable, uintptr_t ref_offset) {
   if (server_mode()) {
     syserv_add_header(is_relocatable, ref_offset);
     return;
   }
 
   if (c_mode()) {
-    printf("unsigned long hpcrun_nm_addrs_len = "
-	   "sizeof(hpcrun_nm_addrs) / sizeof(hpcrun_nm_addrs[0]);\n"
-	   "unsigned long hpcrun_reference_offset = 0x%" PRIxPTR ";\n"
-	   "int hpcrun_is_relocatable = %d;\n",
-	   ref_offset, is_relocatable);
+    printf(
+        "unsigned long hpcrun_nm_addrs_len = "
+        "sizeof(hpcrun_nm_addrs) / sizeof(hpcrun_nm_addrs[0]);\n"
+        "unsigned long hpcrun_reference_offset = 0x%" PRIxPTR ";\n"
+        "int hpcrun_is_relocatable = %d;\n",
+        ref_offset, is_relocatable);
     return;
   }
 
   // default is text mode
-  printf("num symbols = %ld, reference offset = 0x%" PRIxPTR ", "
-	 "relocatable = %d\n",
-	 num_function_entries(), ref_offset, is_relocatable);
+  printf(
+      "num symbols = %ld, reference offset = 0x%" PRIxPTR ", "
+      "relocatable = %d\n",
+      num_function_entries(), ref_offset, is_relocatable);
 }
 
-
-static void
-assert_file_is_readable(const char *filename)
-{
+static void assert_file_is_readable(const char* filename) {
   struct stat sbuf;
   int ret = stat(filename, &sbuf);
   if (ret != 0 || !S_ISREG(sbuf.st_mode)) {
     fprintf(stderr, "hpcfnbounds: unable to open file: %s\n", filename);
     exit(-1);
-  } 
+  }
 }
 
+static Symtab* symtabOpenVDSO() {
+  Symtab* the_symtab = NULL;
 
-static Symtab *
-symtabOpenVDSO()
-{
-  Symtab * the_symtab = NULL;
-
-  char *mem_image = (char *) vdso_segment_addr();
+  char* mem_image = (char*)vdso_segment_addr();
   size_t vdso_size = vdso_segment_len();
 
-  if (Symtab::openFile(the_symtab, mem_image, vdso_size,
-		       VDSO_SEGMENT_NAME_SHORT)) {
+  if (Symtab::openFile(the_symtab, mem_image, vdso_size, VDSO_SEGMENT_NAME_SHORT)) {
     return the_symtab;
   }
   return NULL;
 }
 
-
-void 
-dump_file_info(const char *filename, DiscoverFnTy fn_discovery)
-{
-  Symtab *syms;
+void dump_file_info(const char* filename, DiscoverFnTy fn_discovery) {
+  Symtab* syms;
   string sfile(filename);
-  vector<Symbol *> symvec;
+  vector<Symbol*> symvec;
   uintptr_t image_offset = 0;
 
-  if (strcmp(filename,"[vdso]") == 0) {
+  if (strcmp(filename, "[vdso]") == 0) {
     syms = symtabOpenVDSO();
     if (syms == NULL) {
-      fprintf(stderr,
-	      "!!! INTERNAL hpcfnbounds-bin error !!!\n"
-	      "  -- Symtab::openFile fails for in-memory segment [vdso]!\n");
+      fprintf(
+          stderr, "!!! INTERNAL hpcfnbounds-bin error !!!\n"
+                  "  -- Symtab::openFile fails for in-memory segment [vdso]!\n");
       exit(1);
     }
   } else {
     assert_file_is_readable(filename);
 
-    if ( ! Symtab::openFile(syms, sfile) ) {
-      fprintf(stderr,
-	      "!!! INTERNAL hpcfnbounds-bin error !!!\n"
-	      "  -- file %s is readable, but Symtab::openFile fails !\n",
-	      filename);
+    if (!Symtab::openFile(syms, sfile)) {
+      fprintf(
+          stderr,
+          "!!! INTERNAL hpcfnbounds-bin error !!!\n"
+          "  -- file %s is readable, but Symtab::openFile fails !\n",
+          filename);
       exit(1);
     }
   }
 
   int relocatable = 0;
 
-#ifdef USE_SYMTABAPI_EXCEPTION_BLOCKS 
+#ifdef USE_SYMTABAPI_EXCEPTION_BLOCKS
   //-----------------------------------------------------------------
   // ensure that we don't infer function starts within try blocks or
   // at the start of catch blocks
   //-----------------------------------------------------------------
-  vector<ExceptionBlock *> exvec;
+  vector<ExceptionBlock*> exvec;
   syms->getAllExceptions(exvec);
-  
+
   for (unsigned int i = 0; i < exvec.size(); i++) {
-    ExceptionBlock *e = exvec[i];
+    ExceptionBlock* e = exvec[i];
 
 #ifdef DUMP_EXCEPTION_BLOCK_INFO
-    printf("tryStart = %p tryEnd = %p, catchStart = %p\n", e->tryStart(), 
-	   e->tryEnd(), e->catchStart()); 
-#endif // DUMP_EXCEPTION_BLOCK_INFO
+    printf(
+        "tryStart = %p tryEnd = %p, catchStart = %p\n", e->tryStart(), e->tryEnd(),
+        e->catchStart());
+#endif  // DUMP_EXCEPTION_BLOCK_INFO
     //-----------------------------------------------------------------
     // prevent inference of function starts within the try block
     //-----------------------------------------------------------------
-    add_protected_range((void *) e->tryStart(), (void *) e->tryEnd());
-    
+    add_protected_range((void*)e->tryStart(), (void*)e->tryEnd());
+
     //-----------------------------------------------------------------
     // prevent inference of a function start at the beginning of a
     // catch block. the extent of the catch block is unknown.
     //-----------------------------------------------------------------
-    long cs = e->catchStart(); 
-    add_protected_range((void *) cs, (void *) (cs + 1));
+    long cs = e->catchStart();
+    add_protected_range((void*)cs, (void*)(cs + 1));
   }
-#endif // USE_SYMTABAPI_EXCEPTION_BLOCKS 
+#endif  // USE_SYMTABAPI_EXCEPTION_BLOCKS
 
   syms->getAllSymbolsByType(symvec, Symbol::ST_FUNCTION);
   if (symvec.size() == 0) {
@@ -572,16 +468,16 @@ dump_file_info(const char *filename, DiscoverFnTy fn_discovery)
     //-----------------------------------------------------------------
     // collect addresses of trampolines for long distance calls as per
     // ppc64 abi. empirically, the linker on BG/Q enters these symbols
-    // with the type NOTYPE and a name that contains the substring 
+    // with the type NOTYPE and a name that contains the substring
     // "long_branch"
     //-----------------------------------------------------------------
-    vector<Symbol *> vec;
+    vector<Symbol*> vec;
     syms->getAllSymbolsByType(vec, Symbol::ST_NOTYPE);
     for (unsigned int i = 0; i < vec.size(); i++) {
-      Symbol *s = vec[i];
+      Symbol* s = vec[i];
       string mname = s->getMangledName();
       if (matches_contains(mname, "long_branch") && s->getOffset() != 0) {
-	add_function_entry((void *) s->getOffset(), &mname, true);
+        add_function_entry((void*)s->getOffset(), &mname, true);
       }
     }
   }

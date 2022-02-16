@@ -64,28 +64,25 @@
 // 14. Deal with alien ln fields.
 // ---> is this needed ?
 
-//***************************************************************************
+#include "Struct-Output.hpp"
+
+#include "Struct-Inline.hpp"
+#include "Struct-Skel.hpp"
+
+#include "lib/binutils/VMAInterval.hpp"
+#include "lib/support/dictionary.h"
+#include "lib/support/FileUtil.hpp"
+#include "lib/support/StringTable.hpp"
+#include "lib/xml/xml.hpp"
 
 #include <limits.h>
-
 #include <list>
 #include <map>
 #include <ostream>
 #include <string>
 
-#include <lib/binutils/VMAInterval.hpp>
-#include <lib/support/FileUtil.hpp>
-#include <lib/support/StringTable.hpp>
-#include <lib/support/dictionary.h>
-
-#include <lib/xml/xml.hpp>
-
-#include "Struct-Inline.hpp"
-#include "Struct-Output.hpp"
-#include "Struct-Skel.hpp"
-
-#define INDENT  "  "
-#define INIT_LM_INDEX  2
+#define INDENT        "  "
+#define INIT_LM_INDEX 2
 
 using namespace Inline;
 using namespace std;
@@ -93,14 +90,14 @@ using namespace std;
 static long next_index;
 static long gaps_line;
 
-static const char * hpcstruct_xml_head =
-#include <lib/xml/hpc-structure.dtd.h>
-  ;
+static const char* hpcstruct_xml_head =
+#include "lib/xml/hpc-structure.dtd.h"
+    ;
 
 // temp options for call <C> tags, target (t) field, and device (d) field
-#define ENABLE_CALL_TAGS     1
-#define ENABLE_TARGET_FIELD  1
-#define ENABLE_DEVICE_FIELD  1
+#define ENABLE_CALL_TAGS    1
+#define ENABLE_TARGET_FIELD 1
+#define ENABLE_DEVICE_FIELD 1
 
 //----------------------------------------------------------------------
 
@@ -108,24 +105,17 @@ static const char * hpcstruct_xml_head =
 // fit within << operators.
 
 // this generates pre-order
-#define INDEX  \
-  " i=\"" << next_index++ << "\""
+#define INDEX " i=\"" << next_index++ << "\""
 
-#define NUMBER(label, num)  \
-  " " << label << "=\"" << num << "\""
+#define NUMBER(label, num) " " << label << "=\"" << num << "\""
 
-#define HEX(label, num)  \
-  " " << label << "=\"0x" << hex << num << dec << "\""
+#define HEX(label, num) " " << label << "=\"0x" << hex << num << dec << "\""
 
-#define STRING(label, str)  \
-  " " << label << "=\"" << xml::EscapeStr(str) << "\""
+#define STRING(label, str) " " << label << "=\"" << xml::EscapeStr(str) << "\""
 
-#define VRANGE(vma, len)  \
-  " v=\"{[0x" << hex << vma << "-0x" << vma + len << dec << ")}\""
+#define VRANGE(vma, len) " v=\"{[0x" << hex << vma << "-0x" << vma + len << dec << ")}\""
 
-static void
-doIndent(ostream * os, int depth)
-{
+static void doIndent(ostream* os, int depth) {
   for (int n = 1; n <= depth; n++) {
     *os << INDENT;
   }
@@ -136,79 +126,69 @@ doIndent(ostream * os, int depth)
 namespace BAnal {
 namespace Output {
 
-typedef map <long, TreeNode *> AlienMap;
-typedef map <long, VMAIntervalSet *> LineNumberMap;
+typedef map<long, TreeNode*> AlienMap;
+typedef map<long, VMAIntervalSet*> LineNumberMap;
 
 class ScopeInfo {
 public:
-  long  file_index;
-  long  base_index;
-  long  line_num;
+  long file_index;
+  long base_index;
+  long line_num;
 
-  ScopeInfo(long file, long base, long line = 0)
-  {
+  ScopeInfo(long file, long base, long line = 0) {
     file_index = file;
     base_index = base;
     line_num = line;
   }
 };
 
-static void
-doGaps(ostream *, ostream *, string, FileInfo *, GroupInfo *, ProcInfo *);
+static void doGaps(ostream*, ostream*, string, FileInfo*, GroupInfo*, ProcInfo*);
 
-static void
-doTreeNode(ostream *, int, TreeNode *, ScopeInfo, HPC::StringTable &);
+static void doTreeNode(ostream*, int, TreeNode*, ScopeInfo, HPC::StringTable&);
 
-static void
-doStmtList(ostream *, int, TreeNode *);
+static void doStmtList(ostream*, int, TreeNode*);
 
-static void
-doLoopList(ostream *, int, TreeNode *, HPC::StringTable &);
+static void doLoopList(ostream*, int, TreeNode*, HPC::StringTable&);
 
-static void
-locateTree(TreeNode *, ScopeInfo &, HPC::StringTable &, bool = false);
+static void locateTree(TreeNode*, ScopeInfo&, HPC::StringTable&, bool = false);
 
 //----------------------------------------------------------------------
 
 // Sort StmtInfo by line number and then by vma.
-static bool
-StmtLessThan(StmtInfo * s1, StmtInfo * s2)
-{
-  if (s1->line_num < s2->line_num) { return true; }
-  if (s1->line_num > s2->line_num) { return false; }
+static bool StmtLessThan(StmtInfo* s1, StmtInfo* s2) {
+  if (s1->line_num < s2->line_num) {
+    return true;
+  }
+  if (s1->line_num > s2->line_num) {
+    return false;
+  }
   return s1->vma < s2->vma;
 }
-
 
 //----------------------------------------------------------------------
 
 // DOCTYPE header and <HPCToolkitStructure> tag.
-void
-printStructFileBegin(ostream * os, ostream * gaps, string filenm)
-{
+void printStructFileBegin(ostream* os, ostream* gaps, string filenm) {
   if (os == NULL) {
     return;
   }
 
   *os << "<?xml version=\"1.0\"?>\n"
       << "<!DOCTYPE HPCToolkitStructure [\n"
-      << hpcstruct_xml_head
-      << "]>\n"
+      << hpcstruct_xml_head << "]>\n"
       << "<HPCToolkitStructure i=\"0\" version=\"4.7\" n=\"\">\n";
 
   if (gaps != NULL) {
     *gaps << "This file describes the unclaimed vma ranges (gaps) in the control\n"
-	  << "flow graph for the following file.  This is mostly for debugging and\n"
-	  << "improving ParseAPI.\n\n"
-	  << filenm << "\n";
+          << "flow graph for the following file.  This is mostly for debugging and\n"
+          << "improving ParseAPI.\n\n"
+          << filenm << "\n";
     gaps_line = 5;
   }
 }
 
 // Closing tag.
-void
-printStructFileEnd(ostream * os, ostream * gaps)
-{
+void printStructFileEnd(ostream* os, ostream* gaps) {
   if (os == NULL) {
     return;
   }
@@ -224,25 +204,18 @@ printStructFileEnd(ostream * os, ostream * gaps)
 //----------------------------------------------------------------------
 
 // Begin <LM> load module tag.
-void
-printLoadModuleBegin(ostream * os, string lmName)
-{
+void printLoadModuleBegin(ostream* os, string lmName) {
   if (os == NULL) {
     return;
   }
 
   next_index = INIT_LM_INDEX;
 
-  *os << "<LM"
-      << INDEX
-      << STRING("n", lmName)
-      << " v=\"{}\">\n";
+  *os << "<LM" << INDEX << STRING("n", lmName) << " v=\"{}\">\n";
 }
 
 // Closing </LM> tag.
-void
-printLoadModuleEnd(ostream * os)
-{
+void printLoadModuleEnd(ostream* os) {
   if (os == NULL) {
     return;
   }
@@ -250,28 +223,20 @@ printLoadModuleEnd(ostream * os)
   *os << "</LM>\n";
 }
 
-
 //----------------------------------------------------------------------
 
 // Begin <F> file tag.
-void
-printFileBegin(ostream * os, FileInfo * finfo)
-{
+void printFileBegin(ostream* os, FileInfo* finfo) {
   if (os == NULL || finfo == NULL) {
     return;
   }
 
   doIndent(os, 1);
-  *os << "<F"
-      << INDEX
-      << STRING("n", finfo->fileName)
-      << ">\n";
+  *os << "<F" << INDEX << STRING("n", finfo->fileName) << ">\n";
 }
 
 // Closing </F> tag.
-void
-printFileEnd(ostream * os, FileInfo * finfo)
-{
+void printFileEnd(ostream* os, FileInfo* finfo) {
   if (os == NULL || finfo == NULL) {
     return;
   }
@@ -283,25 +248,20 @@ printFileEnd(ostream * os, FileInfo * finfo)
 //----------------------------------------------------------------------
 
 // Entry point for <P> proc tag and its subtree.
-void
-printProc(ostream * os, ostream * gaps, string gaps_file,
-	  FileInfo * finfo, GroupInfo * ginfo, ProcInfo * pinfo,
-	  HPC::StringTable & strTab)
-{
-  if (os == NULL || finfo == NULL || ginfo == NULL
-      || pinfo == NULL || pinfo->root == NULL) {
+void printProc(
+    ostream* os, ostream* gaps, string gaps_file, FileInfo* finfo, GroupInfo* ginfo,
+    ProcInfo* pinfo, HPC::StringTable& strTab) {
+  if (os == NULL || finfo == NULL || ginfo == NULL || pinfo == NULL || pinfo->root == NULL) {
     return;
   }
 
-  TreeNode * root = pinfo->root;
+  TreeNode* root = pinfo->root;
   long file_index = strTab.str2index(finfo->fileName);
   long base_index = strTab.str2index(FileUtil::basename(finfo->fileName.c_str()));
   ScopeInfo scope(file_index, base_index, pinfo->line_num);
 
   doIndent(os, 2);
-  *os << "<P"
-      << INDEX
-      << STRING("n", pinfo->prettyName);
+  *os << "<P" << INDEX << STRING("n", pinfo->prettyName);
 
   if (pinfo->linkName != pinfo->prettyName) {
     *os << STRING("ln", pinfo->linkName);
@@ -309,13 +269,11 @@ printProc(ostream * os, ostream * gaps, string gaps_file,
   if (pinfo->symbol_index != 0) {
     *os << NUMBER("s", pinfo->symbol_index);
   }
-  *os << NUMBER("l", pinfo->line_num)
-      << VRANGE(pinfo->entry_vma, 1)
-      << ">\n";
+  *os << NUMBER("l", pinfo->line_num) << VRANGE(pinfo->entry_vma, 1) << ">\n";
 
   // write the gaps to the first proc (low vma) of the group.  this
   // only applies to full gaps.
-  if (gaps != NULL && (! ginfo->alt_file) && pinfo == ginfo->procMap.begin()->second) {
+  if (gaps != NULL && (!ginfo->alt_file) && pinfo == ginfo->procMap.begin()->second) {
     doGaps(os, gaps, gaps_file, finfo, ginfo, pinfo);
   }
 
@@ -335,36 +293,27 @@ printProc(ostream * os, ostream * gaps, string gaps_file,
 // to the .gaps file, all within a alien scope.  The basic version is
 // folded into the inline tree in Struct.cpp.
 //
-static void
-doGaps(ostream * os, ostream * gaps, string gaps_file,
-       FileInfo * finfo, GroupInfo * ginfo, ProcInfo * pinfo)
-{
+static void doGaps(
+    ostream* os, ostream* gaps, string gaps_file, FileInfo* finfo, GroupInfo* ginfo,
+    ProcInfo* pinfo) {
   if (gaps == NULL || ginfo->gapSet.empty()) {
     return;
   }
 
   *gaps << "\nfunc:  " << pinfo->prettyName << "\n"
-	<< "link:  " << pinfo->linkName << "\n"
-	<< "file:  " << finfo->fileName << "  line: " << pinfo->line_num << "\n"
-	<< "0x" << hex << ginfo->start << "--0x" << ginfo->end << dec << "\n\n";
+        << "link:  " << pinfo->linkName << "\n"
+        << "file:  " << finfo->fileName << "  line: " << pinfo->line_num << "\n"
+        << "0x" << hex << ginfo->start << "--0x" << ginfo->end << dec << "\n\n";
   gaps_line += 6;
 
   doIndent(os, 3);
-  *os << "<A"
-      << INDEX
-      << NUMBER("l", pinfo->line_num)
-      << STRING("f", finfo->fileName)
-      << STRING("n", "")
-      << " v=\"{}\""
+  *os << "<A" << INDEX << NUMBER("l", pinfo->line_num) << STRING("f", finfo->fileName)
+      << STRING("n", "") << " v=\"{}\""
       << ">\n";
 
   doIndent(os, 4);
-  *os << "<A"
-      << INDEX
-      << NUMBER("l", gaps_line - 4)
-      << STRING("f", gaps_file)
-      << STRING("n", "unclaimed region in: " + pinfo->prettyName)
-      << " v=\"{}\""
+  *os << "<A" << INDEX << NUMBER("l", gaps_line - 4) << STRING("f", gaps_file)
+      << STRING("n", "unclaimed region in: " + pinfo->prettyName) << " v=\"{}\""
       << ">\n";
 
   for (auto git = ginfo->gapSet.begin(); git != ginfo->gapSet.end(); ++git) {
@@ -372,16 +321,11 @@ doGaps(ostream * os, ostream * gaps, string gaps_file,
     long end = git->end();
     long len = end - start;
 
-    *gaps << "gap:  0x" << hex << start << "--0x" << end
-	  << dec << "  (" << len << ")\n";
+    *gaps << "gap:  0x" << hex << start << "--0x" << end << dec << "  (" << len << ")\n";
     gaps_line++;
 
     doIndent(os, 5);
-    *os << "<S"
-	<< INDEX
-	<< NUMBER("l", gaps_line)
-	<< VRANGE(start, len)
-	<< "/>\n";
+    *os << "<S" << INDEX << NUMBER("l", gaps_line) << VRANGE(start, len) << "/>\n";
   }
 
   doIndent(os, 4);
@@ -402,9 +346,7 @@ doGaps(ostream * os, ostream * gaps, string gaps_file,
 // inside a proc scope).
 //
 static void
-doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
-	   HPC::StringTable & strTab)
-{
+doTreeNode(ostream* os, int depth, TreeNode* root, ScopeInfo scope, HPC::StringTable& strTab) {
   if (root == NULL) {
     return;
   }
@@ -420,26 +362,23 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
 
   // divide stmts by file name
   for (auto sit = root->stmtMap.begin(); sit != root->stmtMap.end(); ++sit) {
-    StmtInfo * sinfo = sit->second;
+    StmtInfo* sinfo = sit->second;
     VMA vma = sinfo->vma;
-    TreeNode * node;
+    TreeNode* node;
 
     // use guard alien if files don't match or if earlier line number
     // in same file (but must be known).  stmts with unknown file/line
     // do not need a guard alien.
     if (sinfo->line_num > 0
-	&& (sinfo->base_index != scope.base_index || sinfo->line_num < scope.line_num))
-    {
+        && (sinfo->base_index != scope.base_index || sinfo->line_num < scope.line_num)) {
       auto ait = alienMap.find(sinfo->base_index);
       if (ait != alienMap.end()) {
-	node = ait->second;
+        node = ait->second;
+      } else {
+        node = new TreeNode(sinfo->file_index);
+        alienMap[sinfo->base_index] = node;
       }
-      else {
-	node = new TreeNode(sinfo->file_index);
-	alienMap[sinfo->base_index] = node;
-      }
-    }
-    else {
+    } else {
       // not a guard alien
       node = &localNode;
     }
@@ -449,25 +388,22 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
 
   // divide loops by file name
   for (auto lit = root->loopList.begin(); lit != root->loopList.end(); ++lit) {
-    LoopInfo * linfo = *lit;
-    TreeNode * node;
+    LoopInfo* linfo = *lit;
+    TreeNode* node;
 
     // use guard alien if files don't match or if earlier line number
     // in same file (but must be known).  loops with unknown file/line
     // do not need a guard alien.
     if (linfo->line_num > 0
-	&& (linfo->base_index != scope.base_index || linfo->line_num < scope.line_num))
-    {
+        && (linfo->base_index != scope.base_index || linfo->line_num < scope.line_num)) {
       auto ait = alienMap.find(linfo->base_index);
       if (ait != alienMap.end()) {
-	node = ait->second;
+        node = ait->second;
+      } else {
+        node = new TreeNode(linfo->file_index);
+        alienMap[linfo->base_index] = node;
       }
-      else {
-	node = new TreeNode(linfo->file_index);
-	alienMap[linfo->base_index] = node;
-      }
-    }
-    else {
+    } else {
       // not a guard alien
       node = &localNode;
     }
@@ -481,7 +417,7 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
   // second, print the stmts and loops that do need a guard alien and
   // delete the remaining tree nodes.
   for (auto nit = alienMap.begin(); nit != alienMap.end(); ++nit) {
-    TreeNode * node = nit->second;
+    TreeNode* node = nit->second;
     long file_index = node->file_index;
     long base_index = nit->first;
     ScopeInfo alien_scope(file_index, base_index);
@@ -490,13 +426,9 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
 
     // guard alien
     doIndent(os, depth);
-    *os << "<A"
-	<< INDEX
-	<< NUMBER("l", alien_scope.line_num)
-	<< STRING("f", strTab.index2str(file_index))
-	<< STRING("n", GUARD_NAME)
-	<< " v=\"{}\""
-	<< ">\n";
+    *os << "<A" << INDEX << NUMBER("l", alien_scope.line_num)
+        << STRING("f", strTab.index2str(file_index)) << STRING("n", GUARD_NAME) << " v=\"{}\""
+        << ">\n";
 
     doStmtList(os, depth + 1, node);
     doLoopList(os, depth + 1, node, strTab);
@@ -516,7 +448,7 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
   // inline call sites, use double alien
   for (auto nit = root->nodeMap.begin(); nit != root->nodeMap.end(); ++nit) {
     FLPIndex flp = nit->first;
-    TreeNode * subtree = nit->second;
+    TreeNode* subtree = nit->second;
     string callname = strTab.index2str(flp.pretty_index);
     ScopeInfo subscope(0, 0);
 
@@ -525,24 +457,17 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
     // outer, caller alien.  use file and line from flp call site, but
     // empty proc name.
     doIndent(os, depth);
-    *os << "<A"
-	<< INDEX
-	<< NUMBER("l", flp.line_num)
-	<< STRING("f", strTab.index2str(flp.file_index))
-	<< STRING("n", "")
-	<< " v=\"{}\""
-	<< ">\n";
+    *os << "<A" << INDEX << NUMBER("l", flp.line_num)
+        << STRING("f", strTab.index2str(flp.file_index)) << STRING("n", "") << " v=\"{}\""
+        << ">\n";
 
     // inner, callee alien.  use proc name from flp call site, but
     // file and line from subtree.
     doIndent(os, depth + 1);
-    *os << "<A"
-	<< INDEX
-	<< NUMBER("l", subscope.line_num)
-	<< STRING("f", strTab.index2str(subscope.file_index))
-	<< STRING("n", callname)
-	<< " v=\"{}\""
-	<< ">\n";
+    *os << "<A" << INDEX << NUMBER("l", subscope.line_num)
+        << STRING("f", strTab.index2str(subscope.file_index)) << STRING("n", callname)
+        << " v=\"{}\""
+        << ">\n";
 
     doTreeNode(os, depth + 2, subtree, subscope, strTab);
 
@@ -562,31 +487,27 @@ doTreeNode(ostream * os, int depth, TreeNode * root, ScopeInfo scope,
 //
 // Any guard alien, if needed, has already been printed.
 //
-static void
-doStmtList(ostream * os, int depth, TreeNode * node)
-{
+static void doStmtList(ostream* os, int depth, TreeNode* node) {
   LineNumberMap lineMap;
-  vector <StmtInfo *> callVec;
+  vector<StmtInfo*> callVec;
 
   // split StmtInfo's into call and non-call sets.  the non-call stmts
   // with the same line number are merged into a single vma set.  call
   // stmts are never merged.
   for (auto sit = node->stmtMap.begin(); sit != node->stmtMap.end(); ++sit) {
-    StmtInfo * sinfo = sit->second;
+    StmtInfo* sinfo = sit->second;
 
     if (sinfo->is_call && ENABLE_CALL_TAGS) {
       callVec.push_back(sinfo);
-    }
-    else {
-      VMAIntervalSet * vset = NULL;
+    } else {
+      VMAIntervalSet* vset = NULL;
       auto mit = lineMap.find(sinfo->line_num);
 
       if (mit != lineMap.end()) {
-	vset = mit->second;
-      }
-      else {
-	vset = new VMAIntervalSet;
-	lineMap[sinfo->line_num] = vset;
+        vset = mit->second;
+      } else {
+        vset = new VMAIntervalSet;
+        lineMap[sinfo->line_num] = vset;
       }
       vset->insert(sinfo->vma, sinfo->vma + sinfo->len);
     }
@@ -597,29 +518,23 @@ doStmtList(ostream * os, int depth, TreeNode * node)
   // print non-call vma set as a single <S> stmt
   for (auto mit = lineMap.begin(); mit != lineMap.end(); ++mit) {
     long line = mit->first;
-    VMAIntervalSet * vset = mit->second;
+    VMAIntervalSet* vset = mit->second;
 
     doIndent(os, depth);
-    *os << "<S"
-	<< INDEX
-	<< NUMBER("l", line)
-	<< " v=\"" << vset->toString() << "\""
-	<< "/>\n";
+    *os << "<S" << INDEX << NUMBER("l", line) << " v=\"" << vset->toString() << "\""
+        << "/>\n";
 
     delete vset;
   }
 
   // print each call stmt as a separate <C> tag
   for (uint i = 0; i < callVec.size(); i++) {
-    StmtInfo * sinfo = callVec[i];
+    StmtInfo* sinfo = callVec[i];
 
     doIndent(os, depth);
-    *os << "<C"
-	<< INDEX
-	<< NUMBER("l", sinfo->line_num)
-	<< VRANGE(sinfo->vma, sinfo->len);
+    *os << "<C" << INDEX << NUMBER("l", sinfo->line_num) << VRANGE(sinfo->vma, sinfo->len);
 
-    if (! sinfo->is_sink && ENABLE_TARGET_FIELD) {
+    if (!sinfo->is_sink && ENABLE_TARGET_FIELD) {
       *os << HEX("t", sinfo->target);
     }
     if (ENABLE_DEVICE_FIELD) {
@@ -634,20 +549,14 @@ doStmtList(ostream * os, int depth, TreeNode * node)
 // Print the loops at 'node' and their subtrees.  Any guard alien, if
 // needed, has already been printed.
 //
-static void
-doLoopList(ostream * os, int depth, TreeNode * node, HPC::StringTable & strTab)
-{
+static void doLoopList(ostream* os, int depth, TreeNode* node, HPC::StringTable& strTab) {
   for (auto lit = node->loopList.begin(); lit != node->loopList.end(); ++lit) {
-    LoopInfo * linfo = *lit;
+    LoopInfo* linfo = *lit;
     ScopeInfo scope(linfo->file_index, linfo->base_index);
 
     doIndent(os, depth);
-    *os << "<L"
-	<< INDEX
-	<< NUMBER("l", linfo->line_num)
-	<< STRING("f", strTab.index2str(linfo->file_index))
-	<< VRANGE(linfo->entry_vma, 1)
-	<< ">\n";
+    *os << "<L" << INDEX << NUMBER("l", linfo->line_num)
+        << STRING("f", strTab.index2str(linfo->file_index)) << VRANGE(linfo->entry_vma, 1) << ">\n";
 
     doTreeNode(os, depth + 1, linfo->node, scope, strTab);
 
@@ -668,9 +577,7 @@ doLoopList(ostream * os, int depth, TreeNode * node, HPC::StringTable & strTab)
 // Note: if 'use_file' is true, then use the file from 'scope',
 // otherwise try to guess the correct file.
 //
-static void
-locateTree(TreeNode * node, ScopeInfo & scope, HPC::StringTable & strTab, bool use_file)
-{
+static void locateTree(TreeNode* node, ScopeInfo& scope, HPC::StringTable& strTab, bool use_file) {
   const long max_line = LONG_MAX;
   long empty_index = strTab.str2index("");
 
@@ -681,38 +588,37 @@ locateTree(TreeNode * node, ScopeInfo & scope, HPC::StringTable & strTab, bool u
   // first, find the correct file and base.  if use_file is true, then
   // use the answer in 'scope', else try to guess the file.
   //
-  if (! use_file) {
-
+  if (!use_file) {
     // inline subtrees are the most reliable
     for (auto nit = node->nodeMap.begin(); nit != node->nodeMap.end(); ++nit) {
       FLPIndex flp = nit->first;
 
       if (flp.file_index != empty_index) {
-	scope.file_index = flp.file_index;
-	scope.base_index = flp.base_index;
-	goto found_file;
+        scope.file_index = flp.file_index;
+        scope.base_index = flp.base_index;
+        goto found_file;
       }
     }
 
     // next, try loops
     for (auto lit = node->loopList.begin(); lit != node->loopList.end(); ++lit) {
-      LoopInfo * linfo = *lit;
+      LoopInfo* linfo = *lit;
 
       if (linfo->file_index != empty_index) {
-	scope.file_index = linfo->file_index;
-	scope.base_index = linfo->base_index;
-	goto found_file;
+        scope.file_index = linfo->file_index;
+        scope.base_index = linfo->base_index;
+        goto found_file;
       }
     }
 
     // finally, try stmts
     for (auto sit = node->stmtMap.begin(); sit != node->stmtMap.end(); ++sit) {
-      StmtInfo * sinfo = sit->second;
+      StmtInfo* sinfo = sit->second;
 
       if (sinfo->file_index != empty_index) {
-	scope.file_index = sinfo->file_index;
-	scope.base_index = sinfo->base_index;
-	goto found_file;
+        scope.file_index = sinfo->file_index;
+        scope.base_index = sinfo->base_index;
+        goto found_file;
       }
     }
   }
@@ -726,17 +632,16 @@ found_file:
   for (auto nit = node->nodeMap.begin(); nit != node->nodeMap.end(); ++nit) {
     FLPIndex flp = nit->first;
 
-    if (flp.base_index == scope.base_index && flp.line_num > 0
-	&& flp.line_num < scope.line_num) {
+    if (flp.base_index == scope.base_index && flp.line_num > 0 && flp.line_num < scope.line_num) {
       scope.line_num = flp.line_num;
     }
   }
 
   for (auto lit = node->loopList.begin(); lit != node->loopList.end(); ++lit) {
-    LoopInfo * linfo = *lit;
+    LoopInfo* linfo = *lit;
 
     if (linfo->base_index == scope.base_index && linfo->line_num > 0
-	&& linfo->line_num < scope.line_num) {
+        && linfo->line_num < scope.line_num) {
       scope.line_num = linfo->line_num;
     }
   }
@@ -748,10 +653,10 @@ found_file:
 
   // use stmts as a backup only if no inlines or loops
   for (auto sit = node->stmtMap.begin(); sit != node->stmtMap.end(); ++sit) {
-    StmtInfo * sinfo = sit->second;
+    StmtInfo* sinfo = sit->second;
 
     if (sinfo->base_index == scope.base_index && sinfo->line_num > 0
-	&& sinfo->line_num < scope.line_num) {
+        && sinfo->line_num < scope.line_num) {
       scope.line_num = sinfo->line_num;
     }
   }
@@ -761,6 +666,5 @@ found_file:
     scope.line_num = 0;
   }
 }
-
 }  // namespace Output
 }  // namespace BAnal

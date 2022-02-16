@@ -44,72 +44,57 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-//*****************************************************************************
-// system includes
-//*****************************************************************************
+#include "intervals.h"
 
 #include <iostream>
 
-
-
-//*****************************************************************************
-// local includes
-//*****************************************************************************
-#include "intervals.h"
-
 using namespace std;
 
-
-//*****************************************************************************
-// interface operations
-//*****************************************************************************
-
-
 //-----------------------------------------------------------------------------
-// Method insert: 
+// Method insert:
 //
 //   insert [start,end) into the interval set. merge with overlapping in the
 //   set to maintain the invariant that no point is contained in more
 //   than one interval.
 //-----------------------------------------------------------------------------
-void 
-intervals::insert(void * start, void * end) 
-{
-  if (start >= end) return;
+void intervals::insert(void* start, void* end) {
+  if (start >= end)
+    return;
 
-  map<void *, void *>::iterator lb;
-  map<void *, void *>::iterator ub;
+  map<void*, void*>::iterator lb;
+  map<void*, void*>::iterator ub;
 
   lb = mymap.upper_bound(start);
   ub = mymap.upper_bound(end);
 
-  // inserted interval spans or overlaps one or more intervals if 
+  // inserted interval spans or overlaps one or more intervals if
   // iterators are not equal
-  bool overlaps = (lb != ub); 
+  bool overlaps = (lb != ub);
 
   if (lb != mymap.begin()) {
-    lb--; // move back one interval to see if it contains start
+    lb--;  // move back one interval to see if it contains start
     if (start <= (*lb).second) {
       // start is within existing interval; adjust lower bound of union interval
       start = (*lb).first;
       overlaps = true;
-    } else lb++; // lb doesn't contain start; thus, erasure shouldn't include lb
+    } else
+      lb++;  // lb doesn't contain start; thus, erasure shouldn't include lb
   }
 
   if (ub != mymap.begin()) {
-    ub--; // move back one interval to see if it contains end
+    ub--;  // move back one interval to see if it contains end
     if (end <= (*ub).second) {
-      // end is within existing interval; adjust upper bound of union interval 
+      // end is within existing interval; adjust upper bound of union interval
       end = (*ub).second;
       overlaps = true;
-    } 
-    ub++; // increment ub because erase will only remove up to but not ub
+    }
+    ub++;  // increment ub because erase will only remove up to but not ub
   }
-    
+
   if (overlaps) {
     // remove any intervals that overlap the range being inserted. erase will
     // remove intervals starting at lb up to but not including ub.
-    mymap.erase(lb,ub);
+    mymap.erase(lb, ub);
   }
 
   // insert the refined interval
@@ -118,133 +103,114 @@ intervals::insert(void * start, void * end)
   return;
 }
 
-
 //-----------------------------------------------------------------------------
 // Method contains:
-//    if any interval contains the query point i, return it. 
+//    if any interval contains the query point i, return it.
 //    otherwise, return NULL
 //-----------------------------------------------------------------------------
-pair<void *const, void *> *
-intervals::contains(void * i) 
-{
-  map<void *, void *>::iterator up;
+pair<void* const, void*>* intervals::contains(void* i) {
+  map<void*, void*>::iterator up;
   up = mymap.upper_bound(i);
   if (up != mymap.begin()) {
     --up;
-    if (i >= (*up).first && i < (*up).second)  return &(*up);
+    if (i >= (*up).first && i < (*up).second)
+      return &(*up);
   }
   return NULL;
 }
-
 
 //-----------------------------------------------------------------------------
 // Method clear:
 //    reset the map to empty
 //-----------------------------------------------------------------------------
-void
-intervals::clear()
-{
+void intervals::clear() {
   mymap.clear();
 }
-
 
 //-----------------------------------------------------------------------------
 // Method dump:
 //    print all of the intervals in the set to stdout
 //-----------------------------------------------------------------------------
-void 
-intervals::dump()
-{
-  map<void *, void *>::iterator it;
+void intervals::dump() {
+  map<void*, void*>::iterator it;
   cout << "intervals: ";
-  for (it = mymap.begin(); it != mymap.end(); it++) 
-    cout << "[" << (*it).first << "," << (*it).second << ") "; 
+  for (it = mymap.begin(); it != mymap.end(); it++)
+    cout << "[" << (*it).first << "," << (*it).second << ") ";
   cout << endl;
 }
 
-
-
-//*****************************************************************************
-// private operations 
-//*****************************************************************************
 // #define UNIT_TEST
 #ifdef UNIT_TEST
 intervals ranges;
 
-void 
-test_interval_set_insert(unsigned long start, unsigned long end) 
-{
-  void *vstart = (void *) start;
-  void *vend = (void *) end;
-  cout << "inserting [" << vstart << "," << vend << ")" << endl; 
+void test_interval_set_insert(unsigned long start, unsigned long end) {
+  void* vstart = (void*)start;
+  void* vend = (void*)end;
+  cout << "inserting [" << vstart << "," << vend << ")" << endl;
   ranges.insert(vstart, vend);
   ranges.dump();
 }
 
-
-void 
-test_interval_set_contains(unsigned long i) 
-{
-  pair<void *const, void *> *result = ranges.contains((void *) i); 
-  cout << "search for " << i << ": "; 
+void test_interval_set_contains(unsigned long i) {
+  pair<void* const, void*>* result = ranges.contains((void*)i);
+  cout << "search for " << i << ": ";
   if (result)
-    cout << "found interval [" << result->first << ","<< result->second << ")";
-  else cout << "no interval found";   
-  cout << endl;   
+    cout << "found interval [" << result->first << "," << result->second << ")";
+  else
+    cout << "no interval found";
+  cout << endl;
 }
 
-
-main()
-{
-  test_interval_set_insert(10,20);
+main() {
+  test_interval_set_insert(10, 20);
 
   // disjoint insertion
-  test_interval_set_insert(5,7);
+  test_interval_set_insert(5, 7);
 
   // disjoint insertion
-  test_interval_set_insert(30,32);
+  test_interval_set_insert(30, 32);
 
   // endpoints equal
-  test_interval_set_insert(20,28);
+  test_interval_set_insert(20, 28);
 
   // disjoint insertion
-  test_interval_set_insert(60,89);
+  test_interval_set_insert(60, 89);
 
   // start within interval
-  test_interval_set_insert(27,45);
+  test_interval_set_insert(27, 45);
 
   // end within interval
-  test_interval_set_insert(57,61);
+  test_interval_set_insert(57, 61);
 
   // joining intervals
-  test_interval_set_insert(41,58);
+  test_interval_set_insert(41, 58);
 
   // subsuming intervals
-  test_interval_set_insert(1,90);
+  test_interval_set_insert(1, 90);
 
   // disjoint insertion
-  test_interval_set_insert(94,99);
+  test_interval_set_insert(94, 99);
 
   // disjoint insertion
-  test_interval_set_insert(100,110);
+  test_interval_set_insert(100, 110);
 
   // disjoint insertion
-  test_interval_set_insert(115,120);
+  test_interval_set_insert(115, 120);
 
   // disjoint insertion
-  test_interval_set_insert(140,145);
+  test_interval_set_insert(140, 145);
 
   // disjoint insertion
-  test_interval_set_insert(155,165);
+  test_interval_set_insert(155, 165);
 
   // linking and subsumption
-  test_interval_set_insert(95,142);
+  test_interval_set_insert(95, 142);
 
   // linking and subsumption
-  test_interval_set_insert(93,186);
+  test_interval_set_insert(93, 186);
 
   // subsumption
-  test_interval_set_insert(92,187);
+  test_interval_set_insert(92, 187);
 
   test_interval_set_contains(72);
   test_interval_set_contains(21);
@@ -256,4 +222,4 @@ main()
   test_interval_set_contains(200);
   test_interval_set_contains(91);
 }
-#endif // UNIT_TEST
+#endif  // UNIT_TEST

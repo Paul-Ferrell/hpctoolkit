@@ -44,59 +44,39 @@
 //
 // ******************************************************* EndRiceCopyright *
 
-/******************************************************************************
- * include files
- *****************************************************************************/
-
-#include <stdio.h>
-#include <unistd.h>
-#include <string>
+#include "function-entries.h"
 
 #include "code-ranges.h"
-#include "function-entries.h"
-#include "process-ranges.h"
 #include "intervals.h"
+#include "process-ranges.h"
 #include "server.h"
+
+#include <stdio.h>
+#include <string>
+#include <unistd.h>
 
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
-
 #include <map>
 #include <set>
 
 using namespace std;
 
-
-/******************************************************************************
- * types
- *****************************************************************************/
-
 class Function {
 public:
-  Function(void *_address, string *_comment, bool _isvisible, int _call_count);
-  void AppendComment(const string *c);
-  void *address;
-  string *comment;
+  Function(void* _address, string* _comment, bool _isvisible, int _call_count);
+  void AppendComment(const string* c);
+  void* address;
+  string* comment;
   bool isvisible;
   int call_count;
-  int operator<(Function *right);
+  int operator<(Function* right);
 };
 
+static void new_function_entry(void* addr, string* comment, bool isvisible, int call_count);
+static void dump_function_entry(void* addr, const char* comment);
 
-/******************************************************************************
- * forward declarations
- *****************************************************************************/
-
-static void new_function_entry(void *addr, string *comment, bool isvisible, 
-			       int call_count);
-static void dump_function_entry(void *addr, const char *comment);
-
-
-/******************************************************************************
- * local variables 
- *****************************************************************************/
-
-typedef map<void*,Function*> FunctionSet;
+typedef map<void*, Function*> FunctionSet;
 typedef set<void*> ExcludedFunctionSet;
 
 static FunctionSet function_entries;
@@ -106,21 +86,14 @@ static intervals cbranges;
 
 static long num_entries_total = 0;
 
-
-/******************************************************************************
- * interface operations 
- *****************************************************************************/
-
 // Free the function_entries map, the Function objects in the map, the
 // excluded_function_entries set and cbranges intervals.
 //
-void
-function_entries_reinit(void)
-{
+void function_entries_reinit(void) {
   FunctionSet::iterator it;
 
   for (it = function_entries.begin(); it != function_entries.end(); it++) {
-    Function *f = it->second;
+    Function* f = it->second;
     delete f->comment;
     delete f;
   }
@@ -130,89 +103,71 @@ function_entries_reinit(void)
   num_entries_total = 0;
 }
 
-
-void
-exclude_function_entry(void *addr)
-{
+void exclude_function_entry(void* addr) {
   excluded_function_entries.insert(addr);
 }
 
-
-void 
-dump_reachable_functions()
-{
+void dump_reachable_functions() {
   char buffer[1024];
   FunctionSet::iterator i = function_entries.begin();
 
   for (; i != function_entries.end();) {
-    Function *f = (*i).second;
+    Function* f = (*i).second;
     ++i;
 
-    const char *name;
-    if (!f->isvisible && !(f->call_count > 1) && !is_possible_fn(f->address)) continue;
+    const char* name;
+    if (!f->isvisible && !(f->call_count > 1) && !is_possible_fn(f->address))
+      continue;
     if (f->comment) {
       name = f->comment->c_str();
-    }
-    else {
+    } else {
       // inferred functions must be at least 16 bytes long
       if (i != function_entries.end()) {
-        Function *nextf = (*i).second;
-	if (f->call_count == 0 && 
-	    (((unsigned long) nextf->address) - 
-	     ((unsigned long) f->address)) < 16)  {
-	  long offset = offset_for_fn(f->address);
-	  if (offset == 0) {
+        Function* nextf = (*i).second;
+        if (f->call_count == 0
+            && (((unsigned long)nextf->address) - ((unsigned long)f->address)) < 16) {
+          long offset = offset_for_fn(f->address);
+          if (offset == 0) {
             // if f->address lies within a valid code range, its
-            // offset will be non-zero. if offset is zero, the 
+            // offset will be non-zero. if offset is zero, the
             // address cannot be a valid function start.
-	    continue; 
+            continue;
           }
-	  if (!range_contains_control_flow((char *) f->address + offset, 
-					   ((char *) nextf->address + 
-					    offset)))
-	    continue;
-	}
+          if (!range_contains_control_flow(
+                  (char*)f->address + offset, ((char*)nextf->address + offset)))
+            continue;
+        }
       }
-      sprintf(buffer,"stripped_%p", f->address);
+      sprintf(buffer, "stripped_%p", f->address);
       name = buffer;
     }
     dump_function_entry(f->address, name);
   }
 }
 
-
-void 
-add_stripped_function_entry(void *addr, int call_count)
-{
-  // only add the function if it hasn't been specifically excluded 
-  if (excluded_function_entries.find(addr) == 
-      excluded_function_entries.end())  {
+void add_stripped_function_entry(void* addr, int call_count) {
+  // only add the function if it hasn't been specifically excluded
+  if (excluded_function_entries.find(addr) == excluded_function_entries.end()) {
     add_function_entry(addr, NULL, false, call_count);
   }
 }
 
+bool query_function_entry(void* addr) {
+  FunctionSet::iterator it = function_entries.find(addr);
 
-bool 
-query_function_entry(void *addr)
-{
-  FunctionSet::iterator it = function_entries.find(addr); 
-
-  if (it == function_entries.end()) return false;
-  else return true;
+  if (it == function_entries.end())
+    return false;
+  else
+    return true;
 }
 
-
-void 
-add_function_entry(void *addr, const string *comment, bool isvisible, 
-		   int call_count)
-{
-  FunctionSet::iterator it = function_entries.find(addr); 
+void add_function_entry(void* addr, const string* comment, bool isvisible, int call_count) {
+  FunctionSet::iterator it = function_entries.find(addr);
 
   if (it == function_entries.end()) {
-    new_function_entry(addr, comment ? new string(*comment) : NULL, 
-		       isvisible, call_count);
+    new_function_entry(addr, comment ? new string(*comment) : NULL, isvisible, call_count);
   } else {
-    Function *f = (*it).second;
+    Function* f = (*it).second;
     if (comment) {
       f->AppendComment(comment);
     } else if (f->comment) {
@@ -222,17 +177,15 @@ add_function_entry(void *addr, const string *comment, bool isvisible,
   }
 }
 
-
-void
-entries_in_range(void *start, void *end, vector<void *> &result)
-{
+void entries_in_range(void* start, void* end, vector<void*>& result) {
 #ifdef DEBUG_ENTRIES_IN_RANGE
   printf("function entries for range [%p, %p]\n", start, end);
 #endif
-  FunctionSet::iterator it = function_entries.find(start); 
+  FunctionSet::iterator it = function_entries.find(start);
   for (; it != function_entries.end(); it++) {
-    void *addr = (*it).first;
-    if (addr > end) return;  
+    void* addr = (*it).first;
+    if (addr > end)
+      return;
 #ifdef DEBUG_ENTRIES_IN_RANGE
     printf("  %p\n", addr);
 #endif
@@ -240,31 +193,22 @@ entries_in_range(void *start, void *end, vector<void *> &result)
   }
 }
 
-
-bool contains_function_entry(void *address)
-{
-  FunctionSet::iterator it = function_entries.find(address); 
-  if (it != function_entries.end()) return true;
-  else return false;
+bool contains_function_entry(void* address) {
+  FunctionSet::iterator it = function_entries.find(address);
+  if (it != function_entries.end())
+    return true;
+  else
+    return false;
 }
 
-
-long num_function_entries(void)
-{
+long num_function_entries(void) {
   return (num_entries_total);
 }
-
-
-/******************************************************************************
- * private operations 
- *****************************************************************************/
 
 //
 // Write one function entry in one format: server, C or text.
 //
-static void
-dump_function_entry(void *addr, const char *comment)
-{
+static void dump_function_entry(void* addr, const char* comment) {
   num_entries_total++;
 
   if (server_mode()) {
@@ -276,71 +220,51 @@ dump_function_entry(void *addr, const char *comment)
     if (num_entries_total > 1) {
       printf(",\n");
     }
-    printf("  0x%" PRIxPTR "  /* %s */", (uintptr_t) addr, comment);
+    printf("  0x%" PRIxPTR "  /* %s */", (uintptr_t)addr, comment);
     return;
   }
 
   // default is text mode
-  printf("0x%" PRIxPTR "    %s\n", (uintptr_t) addr, comment);
+  printf("0x%" PRIxPTR "    %s\n", (uintptr_t)addr, comment);
 }
 
-
-static void 
-new_function_entry(void *addr, string *comment, bool isvisible, int call_count)
-{
-  Function *f = new Function(addr, comment, isvisible, call_count);
+static void new_function_entry(void* addr, string* comment, bool isvisible, int call_count) {
+  Function* f = new Function(addr, comment, isvisible, call_count);
   function_entries.insert(pair<void*, Function*>(addr, f));
 }
 
-
-int 
-is_possible_fn(void *addr)
-{
+int is_possible_fn(void* addr) {
   return (cbranges.contains(addr) == NULL);
 }
 
-
 // test if an address is within a range rather than at its start
-int 
-inside_protected_range(void *addr)
-{
-  std::pair<void *const, void *> *interval = cbranges.contains(addr);
-  if (interval != NULL && (addr > interval->first)) return 1;
+int inside_protected_range(void* addr) {
+  std::pair<void* const, void*>* interval = cbranges.contains(addr);
+  if (interval != NULL && (addr > interval->first))
+    return 1;
   return 0;
 }
-
 
 //
 // FIXME? add finer grained segv handling here?
 //
-void 
-add_protected_range(void *start, void *end)
-{
+void add_protected_range(void* start, void* end) {
   if (start < end) {
-    cbranges.insert(start,end);
+    cbranges.insert(start, end);
   }
 }
 
-
-Function::Function(void *_address, string *_comment, bool _isvisible, 
-		   int _call_count) 
-{ 
-  address = _address; 
-  comment = _comment; 
-  isvisible = _isvisible; 
+Function::Function(void* _address, string* _comment, bool _isvisible, int _call_count) {
+  address = _address;
+  comment = _comment;
+  isvisible = _isvisible;
   call_count = _call_count;
 }
 
-
-void
-Function::AppendComment(const string *c) 
-{ 
+void Function::AppendComment(const string* c) {
   *comment = *comment + ", " + *c;
 }
 
-
-int 
-Function::operator<(Function *right)
-{
+int Function::operator<(Function* right) {
   return this->address < right->address;
 }

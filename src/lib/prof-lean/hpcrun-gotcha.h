@@ -44,24 +44,12 @@
 #ifndef hpcrun_gotcha_h
 #define hpcrun_gotcha_h
 
-
 #ifndef HPCRUN_STATIC_LINK
 
-//******************************************************************************
-// system includes
-//******************************************************************************
 #include <gotcha/gotcha.h>
-
-
-
-//******************************************************************************
-// macros
-//******************************************************************************
-
 
 #define GOTCHA_GET_TYPED_WRAPPEE(wrapper, type) (type) gotcha_get_wrappee(wrapper)
 #else
-#define GOTCHA_GET_TYPED_WRAPPEE(wrapper, type) (type) 0
+#define GOTCHA_GET_TYPED_WRAPPEE(wrapper, type) (type)0
 #endif
 #endif
-

@@ -47,22 +47,12 @@
 #ifndef __OMPT_PLACEHOLDERS_H__
 #define __OMPT_PLACEHOLDERS_H__
 
-//***************************************************************************
-// local include files
-//***************************************************************************
-
-#include <hpcrun/utilities/ip-normalized.h>
-
 #include "ompt-types.h"
 
+#include "hpcrun/utilities/ip-normalized.h"
 
-
-//***************************************************************************
-// macros
-//***************************************************************************
-
-#define FOREACH_OMPT_PLACEHOLDER_FN(macro)		\
-  /**** OpenMP state placeholders ****/			\
+#define FOREACH_OMPT_PLACEHOLDER_FN(macro) \
+  /**** OpenMP state placeholders ****/    \
   macro (ompt_idle_state)				\
   macro (ompt_overhead_state)				\
   macro (ompt_barrier_wait_state)			\
@@ -85,41 +75,19 @@
   /* the region is resolved.                        */	\
   macro (ompt_region_unresolved)
 
-
-//***************************************************************************
-// types
-//***************************************************************************
-
 typedef struct {
-  void           *pc;
-  ip_normalized_t pc_norm; 
+  void* pc;
+  ip_normalized_t pc_norm;
 } ompt_placeholder_t;
-
 
 typedef struct {
 #define declare_ompt_ph(f) ompt_placeholder_t f;
   FOREACH_OMPT_PLACEHOLDER_FN(declare_ompt_ph);
-#undef declare_ompt_ph 
-} ompt_placeholders_t; 
-
-
-
-//***************************************************************************
-// forward declarations
-//***************************************************************************
+#undef declare_ompt_ph
+} ompt_placeholders_t;
 
 extern ompt_placeholders_t ompt_placeholders;
 
-
-
-//***************************************************************************
-// interface operations 
-//***************************************************************************
-
-void
-ompt_init_placeholders
-(
- void
-);
+void ompt_init_placeholders(void);
 
 #endif
