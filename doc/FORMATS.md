@@ -16,74 +16,165 @@ See `metrics/METRICS.yaml.ex` for a description of the format for defining
 performance metric taxonomies.
 
 Table of contents:
+  - [Common properties for all formats (READ FIRST)](#common-properties-for-all-formats-read-first)
   - [`meta.db` v4.0](#metadb-version-40)
   - [`profile.db` v4.0](#profiledb-version-40)
   - [`cct.db` v4.0](#cctdb-version-40)
   - [`trace.db` v4.0](#tracedb-version-40)
 
+* * *
+
+Common properties for all formats (READ FIRST)
+==============================================
+
 ### Formats legend ###
+[Formats legend]: #formats-legend
 
-All of the `*.db` files use custom binary formats comprised of a header and a
-series of sub-structures placed throughout the file. Each structure is described
-as a table where each row describes a single field:
+All `*.db` formats are custom binary formats comprised of structures at various
+positions within the file. These structures are described by tables of the
+following form, where each row (except the first and last) describe a field in
+the structure in a notation similar to C's `struct`:
 
- Hex | Type | Name | Description
- ---:| ---- | ---- | -----------
-`00:`|Ty|`field1`  | Description of the value in `field1`
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 4`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|Ty|`field1`     |4.0| Description of the value in `field1`
 |    |
-`13:`|Ty2|`field2` | Description of the value in `field2`
-`15:`|| **END**
+`13:`|Ty2|`field2`    |4.1| Description of the value in `field2`
+`15:`|| **END**          || Extendable, see [Reader compatibility]
 
- - **Hex** lists the byte-offset from the beginning of the structure to the
-   beginning of the field, in hexadecimal. Fields are normally packed with no
-   padding in-between, if there may be a gap between fields an empty row is
-   inserted into the table for readability.
+ - The initial **ALIGNMENT** row indicates the minimum alignment of the absolute
+   file offset of the beginning of the structure. For instance, `A 4` in the
+   above table indicates that `field1` is placed on a 4-byte boundary within the
+   file. See [Alignment properties] for more details.
 
-   If the offset is variable and cannot be determined, a `*` is used instead.
+ - **Hex** lists the constant byte-offset from the beginning of the structure to
+   the beginning of the field, in hexadecimal. Fields are normally packed with
+   no padding in-between, if there may be a gap between fields an empty row is
+   inserted into the table for readability. If the offset is not constant for a
+   field no value is listed.
 
  - **Type** lists the interpretation of the field's bytes, along with
    (implicitly) its size. The standard types are as follows:
-   * u`N` is a unsigned integer of `N` bits.
+   + u`N` is a unsigned integer of `N` bits.
      Multi-byte integers are laid out in little-endian order.
-   * f64 is an IEEE 754 double-precision floating-point number, laid out in
+   + f64 is an IEEE 754 double-precision floating-point number, laid out in
      little-endian order (ie. sign byte comes last).
-   * `Ty`x`N` is an array of `N` elements of type `Ty`. Unless otherwise noted,
-     there is no padding between elements (ie. the stride is equal to the
-     total size of `Ty`).
-   * `Ty`xN is an array of elements of type `Ty`, however the number of elements
-     is not constant. The **Description** of the field indicates the size.
-   * `Ty`*(A) (where `Ty` is any other valid type) is a u64, but additionally
-     the value is the offset of a structure of type `Ty` (ie. a pointer). Unless
-     otherwise noted, this offset is relative to the beginning of the file.
-     The (A) suffix indicates the alignment of the pointer value, see
-     [Alignment properties](#alignment-properties) for details.
-   * char* is a u64, but additionally the value is the offset of the start byte
-     of a null-terminated UTF-8 string. Unless otherwise noted, this offset is
-     relative to the beginning of the file.
+   + `Ty`[`N`] is an array of `N` elements of type `Ty`. There is no padding
+     between elements (ie. the stride is equal to the total size of `Ty`).
+     `N` may refer to a sibling field, or may be `...` if the size is defined
+     in the **Description**.
+   + `Ty`* is a u64, but additionally the value is the absolute byte-offset of a
+     structure of type `Ty` (ie. a pointer to `Ty`). The value is aligned to the
+     minimum alignment of `Ty`, as defined in [Alignment properties].
+   + char* is a u64, but additionally the value is the absolute byte-offset of
+     the start byte of a null-terminated UTF-8 string. The value is generally
+     unaligned.
 
- - **Name** gives a short name to refer to the field.
+ - **Name** gives a short name to refer to the field in further descriptions.
 
- - **Description** describes the value of the field. Larger descriptions may be
-   listed after the table for readability.
+ - **Ver.** lists the first version the field first appeared. Note that if the
+   offset of the field changed over a major version, this number is will not be
+   updated to match the new major version.
 
- - The final **END** row lists the total size of the structure. In general this
-   is also the offset of the subsequent field or array element.
+ - **Description** describes the value of the field. Longer and additional
+   descriptions are listed after the table in separate paragraphs or lists.
+
+ - The final **END** row lists the total size of the structure. If this
+   structure is used in an array, this is the offset of the first field in the
+   following array element. The **Description** indicates whether the structure
+   may be modified in later minor versions (expandable) or not (fixed), see
+   [Reader compatibility] for more details.
+
+
+### Common file structure ###
+[Common file structure]: #common-file-structure
+
+All `*.db` files are structured as a file header containing format identifiers
+and version information, and references to "sections" in the rest of the file.
+The file header always has the following structure:
+
+ Hex | Type | Name     | Description (see the [Formats legend])
+ ---:| ---- | -------- | -------------------------------------------------------
+`00:`|u8[10]|`magic`   | Common format identifier, reads `HPCTOOLKIT` in ASCII
+`0a:`|u8[4]|`format`   | Specific format identifier
+`0e:`|u8|`majorVersion`| Common major version, currently 4
+`0f:`|u8|`minorVersion`| Specific minor version
+`18:`|u64|`szSection1` | Total size of section 1
+`10:`|u8*|`pSection1`  | Pointer to the beginning of section 1
+`28:`|u64|`szSection2` | Total size of section 2
+`20:`|u8*|`pSection2`  | Pointer to the beginning of section 2
+`30:`|   | ...etc...   |
+
+`majorVersion` and `minorVersion` indicate the version of the writer of the
+file, see [Reader compatibility] for implications.
+
+`format` identifies the specific format for the file, and always reads as a
+4-character ASCII string (no terminator). Specifically:
+  - `meta` for [`meta.db` v4.0](#metadb-version-40)
+  - `prof` for [`profile.db` v4.0](#profiledb-version-40)
+  - `ctxt` for [`cct.db` v4.0](#cctdb-version-40)
+  - `trce` for [`trace.db` v4.0](#tracedb-version-40)
+
+Additional notes:
+ - The structure of file headers, including the value for `magic`, does not
+   change across major versions.
+ - The values for `format` follow the same rules as enumerations as defined in
+   [Reader compatibility].
+ - `majorVersion` is consistent across all `*.db` files in one database.
+   `minorVersion` is not in general.
+
+The remainder of the file header is made up of pointers of and sizes of
+contiguous regions of the file, hereafter termed sections. Many but not all
+structures reside in a section. For simplicity, the top-level file header for
+each format is written with a shorthand form of the structure table:
+
+ Hex | Name        | Ver. | Section (see the [Common file structure])
+ ---:| ----------- | ---- | ----------------------------------------------------
+`00:`|                   || See [Common file structure]
+`10:`|`{sz,p}Section1`|4.0| Short description of section 1
+`20:`|`{sz,p}Section2`|4.2| Short description of section 2
+`30:`| ...etc...
+
+The names `Section1` and `Section2` are replaced with more descriptive
+identifiers in practice.
+
+Each section generally starts with a section header structure, this indicates
+what is in the section and where it is located. Sections are generally grouped
+based on related information, and generally contain little padding to facilitate
+reading a large blob of related information.
+
+Additional notes:
+ - `p*` fields are aligned based on the alignment of the section header
+   structure, unless otherwise noted.
+ - The order of sections in the file and the order they are listed in the header
+   may differ, do not rely on any section ordering properties without checking
+   first.
+
 
 ### Alignment properties ###
+[Alignment properties]: #alignment-properties
 
-Most of the fields within the `*.db` file formats are designed for efficient
-access through an mmapped segment, to support this most fields are aligned to a
-boundary equivalent to their size (eg. u64 to an 8-byte boundary, u32 to 4-byte,
-etc.). Structures are aligned based on the maximum required alignment among
-their fields.
+The `*.db` formats are designed for efficient access through memory-mapped
+segments, to support this fields are aligned to improve access for
+performance-critical readers. All types have a minimum alignment that is
+respected (unless otherwise noted), defined as follows:
 
-Pointers containing aligned values have an additional (A) suffix indicating
-the alignment: u8\*(8) is aligned to an 8-byte boundary, u32*(4) is aligned to
-a 4-byte boundary, etc. Note that the alignment may not be the same as the
-minimum alignment required by the type.
+ - Integers (u`N`) have a minimum alignment equal to their width (`N/8`).
+   For example, u32 is 4-byte aligned.
+ - Floating point numbers (f64) are 8-byte aligned.
+ - Arrays (`Ty`[`N`]) have the same alignment as their elements (`Ty`). In this
+   case the total size of `Ty` is a multiple of the alignment of `Ty`, so there
+   is no implicit padding between elements.
+ - Pointers (`Ty`* and char*) are 8-byte aligned (same as u64).
+ - Structures listed with structure tables have the alignment listed in their
+   initial **ALIGNMENT** row. In general this is at least the alignment of all
+   contained fields.
 
-The following fields/structures are not fully aligned in the current format, see
-the notes in these sections for recommendations on how to adapt:
+Note that 8-byte alignment is the maximum possible alignment.
+
+The following fields are not always aligned, see the notes in their defining
+sections for recommendations on how to achieve performance in these cases:
  - Performance data arrays in [Profile-Major][PSVB] and
    [Context-Major Sparse Value Block][CSVB], and
  - The array in a [trace line][THsec].
@@ -92,32 +183,52 @@ the notes in these sections for recommendations on how to adapt:
 [CSVB]: #context-major-sparse-value-block
 [THsec]: #tracedb-trace-headers-section
 
-### A word on compatibility ###
 
-All of the `*.db` file formats are designed to allow readers to implement
-*forward compatibility* within a major version, where the minor version of the
-`*.db` format is larger ("after") the version the reader was implemented for.
-By "forward compatibility", we mean that in general data present in previous
-versions can still be read and interpreted, but fields added later will not in
-general be available. Note that fields may be added later in regions previously
-classified as "gaps" in structures.
+### Reader compatibility ###
+[Reader compatibility]: #reader-compatibility
 
-One common exception to the above rule are enumerations -- integers with values
-that have specific well-defined meanings. New values may be added in later
-versions of the formats, it is up to the reader to error or otherwise ignore
-data that depends on an unknown enumeration value. No fields will become
-inaccessible due to an unknown enumeration value.
+The `*.db` formats are also designed for high compatibility between readers and
+writers as both continue to update. Readers are able to determine the level of
+compatibility needed or available by inspecting the major and minor version
+numbers in the [Common file structure]. Specifically, we define two kinds of
+compatibility, taken from the reader's perspective:
+ - *Backward compatibility*, when the reader (eg. v4.5) is a newer version than
+   the writer of the file (eg. v4.3).
+ - *Forward compatibility*, when the reader (eg. v4.5) is an older version than
+   the writer of the file (eg. v4.7).
 
-If required, it is up to readers to implement *backward compatibility*, where
-the version of the `*.db` format is smaller ("before") the version the reader
-was implemented for. Usually this works by selectively disabling the access of
-fields that were not present in the previous version of the format.
+Backward compatibility is implemented by the reader when required, in this case
+the reader simply does not access fields that were not present in the listed
+version. Note that the offsets of fields may change across major versions, the
+reader is responsible for implementing any differences.
 
-Finally, the major/minor version numbers listed in every `*.db` file follow the
-[Semantic Versioning](https://semver.org) scheme: the major version is
-incremented whenever a format change would break forward compatibility, and the
-minor version if not. The major version of all files in a single database is
-always consistent, even if no change occurred for some formats.
+Forward compatibility is implemented by the format specification and is only
+available across minor versions. For readers, this means:
+ - All fields supported by the reader will be accessible, but fields added
+   later than the reader's supported version will not be accessible.
+ - Readers must ignore or error unknown enumeration values. This will not affect
+   the availability of any fields. The reader is responsible for synthesizing a
+   fallback result from available data.
+ - Readers must always use the saved structure size for "expandable" structures
+   (described below) as the stride for arrays, rather than the size in the
+   reader's supported version.
+
+"Expandable" structures may increase in size over the course of minor versions,
+the converse are "fixed" structures which do not. The status of any particular
+structure is noted in the **END** row of the structure's table.
+
+The format specification relies on the following restrictions to preserve
+forward compatibility to the greatest extent possible:
+ - Fields and enumeration values must never be removed, replaced, or change
+   meaning in ways that would break older readers.
+ - The presence or interpretation of fields must not depend on enumeration
+   values.
+ - Fields may be added in any previously uninterpreted region: in "gaps" between
+   previous fields or at the end of the structure if it is expandable.
+ - Enumeration values may be added in previously unallocated values.
+
+A breakage of any of these restrictions requires a major version bump, adding
+new fields or enumeration values requires a minor version bump.
 
 * * *
 
@@ -130,28 +241,18 @@ always consistent, even if no change occurred for some formats.
 
 The `meta.db` file starts with the following header:
 
- Hex | Type | Name       | Description
- ---:| ---- | ---------- | ----------------------------------------------------
-`00:`|u8x14|`magic`      | Format identifier, reads `HPCTOOLKITmeta` in ASCII
-`0e:`|u8|`majorVersion`  | Major version number, currently 4
-`0f:`|u8|`minorVersion`  | Minor version number, currently 0
-`10:`|u64|`szGeneral`    | Size of the [General Properties section][GPsec]
-`18:`|u8*(8)|`pGeneral`  | Pointer to the [General Properties section][GPsec]
-`20:`|u64|`szIdNames`    | Size of the [Identifier Names section][INsec]
-`28:`|u8*(8)|`pIdNames`  | Pointer to the [Identifier Names section][INsec]
-`30:`|u64|`szMetrics`    | Size of the [Performance Metrics section][PMsec]
-`38:`|u8*(8)|`pMetrics`  | Pointer to the [Performance Metrics section][PMsec]
-`40:`|u64|`szContext`    | Size of the [Context Tree section][CTsec]
-`48:`|u8*(8)|`pContext`  | Pointer to the [Context Tree section][CTsec]
-`50:`|u64|`szStrings`    | Size of the Common String Table section
-`58:`|u8*(1)|`pStrings`  | Pointer to the Common String Table section
-`60:`|u64|`szModules`    | Size of the [Load Modules section][LMsec]
-`68:`|u8*(8)|`pModules`  | Pointer to the [Load Modules section][LMsec]
-`70:`|u64|`szFiles`      | Size of the [Source Files section][SFsec]
-`78:`|u8*(8)|`pFiles`    | Pointer to the [Source Files section][SFsec]
-`80:`|u64|`szFunctions`  | Size of the [Functions section][Fnsec]
-`88:`|u8*(8)|`pFunctions`| Pointer to the [Functions section][Fnsec]
-`90:`|| **END**
+ Hex | Name         | Ver. | Section (see the [Common file structure])
+ ---:| ------------ | ---- | ---------------------------------------------------
+`00:`|                    || See [Common file structure]
+`10:`|`{sz,p}General`  |4.0| [General Properties][GPsec]
+`20:`|`{sz,p}IdNames`  |4.0| [Identifier Names][INsec]
+`30:`|`{sz,p}Metrics`  |4.0| [Performance Metrics][PMsec]
+`40:`|`{sz,p}Context`  |4.0| [Context Tree][CTsec]
+`50:`|`{sz,p}Strings`  |4.0| Common String Table
+`60:`|`{sz,p}Modules`  |4.0| [Load Modules][LMsec]
+`70:`|`{sz,p}Files`    |4.0| [Source Files][SFsec]
+`80:`|`{sz,p}Functions`|4.0| [Functions][Fnsec]
+`90:`| **END**            || Extendable, see [Reader compatibility]
 
 [GPsec]: #metadb-general-properties-section
 [INsec]: #metadb-hierarchical-identifier-names-section
@@ -168,15 +269,17 @@ Additional notes:
    as a section to store strings for the [Load Modules section][LMsec],
    the [Source Files section][SFsec], and the [Functions section][Fnsec].
 
+
 `meta.db` General Properties section
 -----------------------------------------
 The General Properties section starts with the following header:
 
- Hex | Type | Name        | Description
- ---:| ---- | ----------- | ----------------------------------------------------
-`00:`|char*|`pTitle`      | Title of the database. May be provided by the user.
-`08:`|char*|`pDescription`| Human-readable Markdown description of the database.
-`10:`|| **END**
+ Hex | Type | Name     | Ver. | Description (see the [Formats legend])
+ ---:| ---- | -------- | ---- | -----------------------------------------------
+`A 8`|| **ALIGNMENT**        || See [Alignment properties]
+`00:`|char*|`pTitle`      |4.0| Title of the database. May be provided by the user.
+`08:`|char*|`pDescription`|4.0| Human-readable Markdown description of the database.
+`10:`|| **END**              || Extendable, see [Reader compatibility]
 
 `description` provides information about the measured execution and subsequent
 analysis that may be of interest to users. The exact layout and the information
@@ -196,14 +299,17 @@ Additional notes:
 
 The Hierarchical Identifier Names section starts with the following header:
 
- Hex | Type | Name          | Description
- ---:| ---- | ------------- | --------------------------------------------------
-`00:`|char\*xN*(8)|`ppNames`| Pointer to an array of `nKinds` human-readable names for Id. Names
-`08:`|u8|`nKinds`           | Number of names listed in this section
-`09:`|| **END**
+ Hex | Type | Name   | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------ | ---- | --------------------------------------------------
+`A 8`|| **ALIGNMENT**      || See [Alignment properties]
+`00:`|{Names}*|`ppNames`|4.0| Human-readable names for Identifier kinds
+`08:`|u8|`nKinds`       |4.0| Number of names listed in this section
+`09:`|| **END**            || Extendable, see [Reader compatibility]
 
-`ppNames[kind]` is the human-readable name for the Identifier kind `kind`,
-where `kind` is part of a [Hierarchical Identifier Tuple][HIT].
+{Names} above refers to a char*[`nKinds`] structure, ie. an array of `nKinds`
+pointers to human-readable names for Identifier kinds. `ppNames[kind]` is the
+human-readable name for the Identifier kind `kind`, where `kind` is part of a
+[Hierarchical Identifier Tuple][HIT].
 
 [HIT]: #profiledb-hierarchical-identifier-tuple-section
 
@@ -231,46 +337,50 @@ Additional notes:
 
 The Performance Metrics section starts with the following header:
 
- Hex | Type | Name         | Description
- ---:| ---- | ------------ | --------------------------------------------------
-`00:`|{MD}xN*(8)|`pMetrics`| Pointer to an array of `nMetrics` metric descriptions
-`08:`|u32|`nMetrics`   | Number of performance metrics included in this section
-`0c:`|u8|`szMetric`    | Size of the {MD} structure, currently 24
-`0d:`|u8|`szScope`     | Size of the {PS} structure, currently 24
-`0e:`|u8|`szSummary`   | Size of the {SS} structure, currently 16
-`0f:`|| **END**
+ Hex | Type | Name             | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---------------- | ---- | ----------------------------------------
+`A 8`|| **ALIGNMENT**                || See [Alignment properties]
+`00:`|{MD}[`nMetrics`]*|`pMetrics`|4.0| Descriptions of performance metrics
+`08:`|u32|`nMetrics`              |4.0| Number of performance metrics
+`0c:`|u8|`szMetric`               |4.0| Size of the {MD} structure, currently 24
+`0d:`|u8|`szScope`                |4.0| Size of the {PS} structure, currently 24
+`0e:`|u8|`szSummary`              |4.0| Size of the {SS} structure, currently 16
+`0f:`|| **END**                      || Extendable, see [Reader compatibility]
 
 {MD} above refers to the following sub-structure:
 
- Hex | Type | Name     | Description
- ---:| ---- | -------- | ------------------------------------------------------
-`00:`|char*|`pName`    | Canonical name of the raw performance metric
-`08:`|u16|`nScopes`    | Number of propagation scopes used for this metric
+ Hex | Type | Name           | Ver. | Description (see the [Formats legend])
+ ---:| ---- | -------------- | ---- | ------------------------------------------
+`A 8`|| **ALIGNMENT**              || See [Alignment properties]
+`00:`|char*|`pName`             |4.0| Canonical name for the metric
+`08:`|u16|`nScopes`             |4.0| Number of scopes used for this metric
 |    |
-`10:`|{PS}xN*(8)|`pScopes`| Pointer to an array of `nScopes` propagation scope descriptions
-`18:`|| **END**
+`10:`|{PS}[`nScopes`]*|`pScopes`|4.0| Descriptions of used propagation scopes
+`18:`|| **END**                    || Extendable, see [Reader compatibility]
 
 {PS} above refers to the following sub-structure:
 
- Hex | Type | Name        | Description
- ---:| ---- | ----------- | ---------------------------------------------------
-`00:`|char*|`pScope`      | Canonical name of the propagation scope
-`08:`|u16|`nSummaries`    | Number of summary statistics generated for this scope
-`0a:`|u16|`propMetricId`  | Unique identifier for propagated metric values
+ Hex | Type | Name     | Ver. | Description (see the [Formats legend])
+ ---:| ---- | -------- | ---- | ------------------------------------------------
+`A 8`|| **ALIGNMENT**        || See [Alignment properties]
+`00:`|char*|`pScope`      |4.0| Canonical name of the propagation scope
+`08:`|u16|`nSummaries`    |4.0| Number of summary statistics for this scope
+`0a:`|u16|`propMetricId`  |4.0| Unique identifier for propagated metric values
 |    |
-`10:`|{SS}xN*(8)|`pSummaries`| Array of `nSummaries` summary statistic descriptions
-`18:`|| **END**
+`10:`|{SS}[`nSummaries`]*|`pSummaries`|4.0| Descriptions of generated summary statistics
+`18:`|| **END**              || Extendable, see [Reader compatibility]
 
 {SS} above refers to the following sub-structure:
 
- Hex | Type | Name      | Description
- ---:| ---- | --------- | -----------------------------------------------------
-`00:`|char*|`pFormula`  | Canonical unary function used for summary values
-`08:`|u8|`combine`      | Combination n-ary function used for summary values
+ Hex | Type | Name   | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------ | ---- | --------------------------------------------------
+`A 8`|| **ALIGNMENT**      || See [Alignment properties]
+`00:`|char*|`pFormula`  |4.0| Canonical unary function used for summary values
+`08:`|u8|`combine`      |4.0| Combination n-ary function used for summary values
 |    |
-`0a:`|u16|`statMetricId`| Unique identifier for summary statistic values
+`0a:`|u16|`statMetricId`|4.0| Unique identifier for summary statistic values
 |    |
-`10:`|| **END**
+`10:`|| **END**            || Extendable, see [Reader compatibility]
 
 > The propagation scope `scope` may be any string, however to aid writing and
 > maintaining metric taxonomies (see METRICS.yaml) the names rarely change
@@ -313,12 +423,13 @@ Additional notes:
 
 The Load Modules section starts with the following header:
 
- Hex | Type | Name          | Description
- ---:| ---- | ------------- | -------------------------------------------------
-`00:`|[LMS]xN*(8)|`pModules`| Pointer to an array of `nModules` load module specifications
-`08:`|u32|`nModules` | Number of load modules listed in this section
-`0c:`|u16|`szModule` | Size of a [Load Module Specification][LMS], currently 16
-`0e:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 8`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|[LMS]\[`nModules`]*|`pModules`|4.0| Load modules used in this database
+`08:`|u32|`nModules`  |4.0| Number of load modules listed in this section
+`0c:`|u16|`szModule`  |4.0| Size of a [Load Module Specification][LMS], currently 16
+`0e:`|| **END**          || Extendable, see [Reader compatibility]
 
 [LMS]: #load-module-specification
 
@@ -331,12 +442,13 @@ Additional notes:
 ### Load Module Specification ###
 A Load Module Specification refers to the following structure:
 
- Hex | Type | Name | Description
- ---:| ---- | ---- | ----------------------------------------------------------
-`00:`|u32|`flags`  | Reserved for future use
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 8`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|u32|`flags`     |4.0| Reserved for future use
 |    |
-`08:`|char*|`pPath`| Full path to the associated application binary
-`10:`|| **END**
+`08:`|char*|`pPath`   |4.0| Full path to the associated application binary
+`10:`|| **END**          || Extendable, see [Reader compatibility]
 
 Additional notes:
  - The string pointed to by `pPath` is completely within the
@@ -351,12 +463,13 @@ Additional notes:
 
 The Source Files section starts with the following header:
 
- Hex | Type | Name        | Description
- ---:| ---- | ----------- | ---------------------------------------------------
-`00:`|[SFS]xN*(8)|`pFiles`| Pointer to an array of `nFiles` source file specifications
-`08:`|u32|`nFiles` | Number of source files listed in this section
-`0c:`|u16|`szFile` | Size of a [Source File Specification][SFS], currently 16
-`0e:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 8`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|[SFS]\[`nFiles`]*|`pFiles`|4.0| Source files used in this database
+`08:`|u32|`nFiles`    |4.0| Number of source files listed in this section
+`0c:`|u16|`szFile`    |4.0| Size of a [Source File Specification][SFS], currently 16
+`0e:`|| **END**          || Extendable, see [Reader compatibility]
 
 [SFS]: #source-file-specification
 
@@ -369,12 +482,13 @@ Additional notes:
 ### Source File Specification ###
 A Source File Specification refers to the following structure:
 
- Hex | Type | Name   | Description
- ---:| ---- | ------ | --------------------------------------------------------
-`00:`|{Flags}|`flags`| See below
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 8`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|{Flags}|`flags` |4.0| See below
 |    |
-`08:`|char*|`pPath`  | Path to the source file. Absolute, or relative to the root database directory.
-`10:`|| **END**
+`08:`|char*|`pPath`   |4.0| Path to the source file. Absolute, or relative to the root database directory.
+`10:`|| **END**          || Extendable, see [Reader compatibility]
 
 {Flags} refers to an u32 bitfield with the following sub-fields (bit 0 is
 least significant):
@@ -402,12 +516,13 @@ Additional notes:
 
 The Functions section starts with the following header:
 
- Hex | Type | Name           | Description
- ---:| ---- | -------------- | ------------------------------------------------
-`00:`|[FS]xN*(8)|`pFunctions`| Pointer to an array of `nFunctions` function specifications
-`08:`|u32|`nFunctions`| Number of functions listed in this section
-`0c:`|u16|`szFunction`| Size of a [Function Specification][FS], currently 40
-`0e:`|| **END**
+ Hex | Type | Name   | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------ | ---- | --------------------------------------------------
+`A 8`|| **ALIGNMENT**      || See [Alignment properties]
+`00:`|[FS]\[`nFunctions`]*|`pFunctions`|4.0| Functions used in this database
+`08:`|u32|`nFunctions`  |4.0| Number of functions listed in this section
+`0c:`|u16|`szFunction`  |4.0| Size of a [Function Specification][FS], currently 40
+`0e:`|| **END**            || Extendable, see [Reader compatibility]
 
 [FS]: #function-specification
 
@@ -420,15 +535,16 @@ Additional notes:
 ### Function Specification ###
 A Function Specification refers to the following structure:
 
- Hex | Type | Name       | Description
- ---:| ---- | ---------- | -----------------------------------------------------
-`00:`|char*|`pName`      | Human-readable name of the function, or 0
-`08:`|[LMS]*(8)|`pModule`| Load module containing this function, or 0
-`10:`|u64|`offset`       | Offset within `*pModule` of this function's entry point
-`18:`|[SFS]*(8)|`pFile`  | Source file of the function's definition, or 0
-`20:`|u32|`line`         | Source line in `*pFile` of the function's definition
-`24:`|u32|`flags`        | Reserved for future use
-`28:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 8`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|char*|`pName`   |4.0| Human-readable name of the function, or 0
+`08:`|[LMS]*|`pModule`|4.0| Load module containing this function, or 0
+`10:`|u64|`offset`    |4.0| Offset within `*pModule` of this function's entry point
+`18:`|[SFS]*|`pFile`  |4.0| Source file of the function's definition, or 0
+`20:`|u32|`line`      |4.0| Source line in `*pFile` of the function's definition
+`24:`|u32|`flags`     |4.0| Reserved for future use
+`28:`|| **END**          || Extendable, see [Reader compatibility]
 
 [LMS]: #load-module-specification
 [SFS]: #source-file-specification
@@ -470,31 +586,33 @@ Additional notes:
 
 The Context Tree section starts with the following header:
 
- Hex | Type | Name        | Description
- ---:| ---- | ----------- | ---------------------------------------------------
-`00:`|u64|`szRoots`       | Total size of the `roots` field, in bytes
-`08:`|{Ctx}xN*(8)|`pRoots`| Pointer to an array of root context specifications
-`10:`|| **END**
+ Hex | Type | Name     | Ver. | Description (see the [Formats legend])
+ ---:| ---- | -------- | ---- | ------------------------------------------------
+`A 8`|| **ALIGNMENT**        || See [Alignment properties]
+`00:`|u64|`szRoots`       |4.0| Total size of the `*pRoots` array, in bytes
+`08:`|{Ctx}[...]*|`pRoots`|4.0| Pointer to an array of root context specifications
+`10:`|| **END**              || Extendable, see [Reader compatibility]
 
 {Ctx} here refers to the following structure:
 
- Hex | Type | Name           | Description
- ---:| ---- | -------------- | ------------------------------------------------
-`00:`|u64|`szChildren`       | Total size of `*pChildren`, in bytes
-`08:`|{Ctx}xN*(8)|`pChildren`| Pointer to the array of child contexts
-`10:`|u32|`ctxId`            | Unique identifier for this context
-`14:`|{Flags}|`flags`        | See below
-`15:`|u8|`relation`          | Relation this context has with its parent
-`16:`|u8|`lexicalType`       | Type of lexical context represented
-`17:`|u8|`nFlexWords`        | Size of `flex`, in u8x8 "words" (bytes / 8)
-`18:`|u8x8xN|`flex`          | Flexible data region, see below
+ Hex | Type | Name            | Ver. | Description (see the [Formats legend])
+ ---:| ---- | --------------- | ---- | -------------------------------------------
+`A 8`|| **ALIGNMENT**               || See [Alignment properties]
+`00:`|u64|`szChildren`           |4.0| Total size of `*pChildren`, in bytes
+`08:`|{Ctx}[...]*|`pChildren`    |4.0| Pointer to the array of child contexts
+`10:`|u32|`ctxId`                |4.0| Unique identifier for this context
+`14:`|{Flags}|`flags`            |4.0| See below
+`15:`|u8|`relation`              |4.0| Relation this context has with its parent
+`16:`|u8|`lexicalType`           |4.0| Type of lexical context represented
+`17:`|u8|`nFlexWords`            |4.0| Size of `flex`, in u8[8] "words" (bytes / 8)
+`18:`|u8[8]\[`nFlexWords`]|`flex`|4.0| Flexible data region, see below
 ` *:`|| **END**
 
 `flex` contains a dynamic sequence of sub-fields, which are sequentially
 "packed" into the next unused bytes at the minimum alignment. In particular:
- - An u64 sub-field will always take the next full u8x8 "word" and never span
+ - An u64 sub-field will always take the next full u8[8] "word" and never span
    two words, but
- - Two u32 sub-fields will share a single u8x8 word even if an u64 sub-field
+ - Two u32 sub-fields will share a single u8[8] word even if an u64 sub-field
    is between them in the packing order.
 
 The packing order is indicated by the index on `flex`, ie. `flex[1]` is the
@@ -564,16 +682,12 @@ a particular calling context can be obtained through a simple binary search.
 
 The `profile.db` file starts with the following header:
 
- Hex | Type | Name     | Description
- ---:| ---- | -------- | ------------------------------------------------------
-`00:`|u8x14|`magic`    | Format identifier, reads `HPCTOOLKITprof` in ASCII
-`0e:`|u8|`majorVersion`| Major version number, currently 4
-`0f:`|u8|`minorVersion`| Minor version number, currently 0
-`10:`|u64|`szProfileInfos`   | Size of the [Profile Info section][PIsec]
-`18:`|u8*(8)|`pProfileInfos` | Pointer to the [Profile Info section][PIsec]
-`20:`|u64|`szIdTuples`       | Size of the [Identifier Tuple section][HITsec]
-`28:`|u8*(8)|`pIdTuples`     | Pointer to the [Identifier Tuple section][HITsec]
-`30:`|| **END**
+ Hex | Name            | Ver. | Section (see the [Common file structure])
+ ---:| --------------- | ---- | ------------------------------------------------
+`00:`|                       || See [Common file structure]
+`10:`|`{sz,p}ProfileInfos`|4.0| [Profiles Information][PIsec]
+`20:`|`{sz,p}IdTuples`    |4.0| [Hierarchical Identifier Tuples][HITsec]
+`30:`| **END**               || Extendable, see [Reader compatibility]
 
 [PIsec]: #profiledb-profile-info-section
 [HITsec]: #profiledb-hierarchical-identifier-tuple-section
@@ -593,20 +707,22 @@ The `profile.db` file ends with an 8-byte footer, reading `_prof.db` in ASCII.
 
 The Profile Info section starts with the following header:
 
- Hex | Type | Name          | Description
- ---:| ---- | ------------- | -------------------------------------------------
-`00:`|{PI}xN*(8)|`pProfiles`| Pointer to an array of `nProfiles` profile descriptions
-`08:`|u32|`nProfiles`       | Number of profiles listed in this section
-`0c:`|u8|`szProfile`        | Size of a {PI} structure, currently 40
-`0d:`|| **END**
+ Hex | Type | Name  | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ----- | ---- | ---------------------------------------------------
+`A 8`|| **ALIGNMENT**     || See [Alignment properties]
+`00:`|{PI}[`nProfiles`]*|`pProfiles`|4.0| Description for each profile
+`08:`|u32|`nProfiles`  |4.0| Number of profiles listed in this section
+`0c:`|u8|`szProfile`   |4.0| Size of a {PI} structure, currently 40
+`0d:`|| **END**           || Extendable, see [Reader compatibility]
 
 {PI} above refers to the following structure:
 
- Hex | Type | Name        | Description
- ---:| ---- | ------------| --------------------------------------------------
-`00:`|[PSVB]|`valueBlock` | Header for the values for this application thread
-`20:`|[HIT]*(8)|`pIdTuple`| Identifier tuple for this application thread
-`28:`|| **END**
+ Hex | Type | Name    | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------- | ---- | -------------------------------------------------
+`A 8`|| **ALIGNMENT**       || See [Alignment properties]
+`00:`|[PSVB]|`valueBlock`|4.0| Header for the values for this application thread
+`20:`|[HIT]*|`pIdTuple`  |4.0| Identifier tuple for this application thread
+`28:`|| **END**             || Extendable, see [Reader compatibility]
 
 [HIT]: #profiledb-hierarchical-identifier-tuple-section
 [PSVB]: #profile-major-sparse-value-block
@@ -630,30 +746,33 @@ Additional notes:
 
 Each Profile-Major Sparse Value Block has the following structure:
 
- Hex | Type | Name             | Description
- ---:| ---- | ---------------- | ---------------------------------------------------
-`00:`|u64|`nValues`            | Number of non-zero values in this block
-`08:`|{Val}xN*(2)|`pValues`    | Pointer to an array of `nValues` value pairs
-`10:`|u32|`nCtxs`              | Number of non-empty contexts in this block
+ Hex | Type | Name              | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ----------------- | ---- | ---------------------------------------
+`A 8`|| **ALIGNMENT**                 || See [Alignment properties]
+`00:`|u64|`nValues`                |4.0| Number of non-zero values
+`08:`|{Val}[`nValues`]*|`pValues`  |4.0| Metric-value pairs
+`10:`|u32|`nCtxs`                  |4.0| Number of non-empty contexts
 |    |
-`18:`|{Idx}xN*(4)|`pCtxIndices`| Pointer to an array of `nCtxs` context indices
-`20:`|| **END**
+`18:`|{Idx}[`nCtxs`]*|`pCtxIndices`|4.0| Mapping from contexts to values
+`20:`|| **END**                       || Fixed, see [Reader compatibility]
 
 {Val} above refers to the following structure:
 
- Hex | Type | Name  | Description
- ---:| ---- | ----- | ---------------------------------------------------------
-`00:`|u16|`metricId`| Unique identifier of a metric listed in the [`meta.db`](#metadb-performance-metrics-section)
-`02:`|f64|`value`   | Value of the metric indicated by `metricId`
-`0a:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 2`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|u16|`metricId`  |4.0| Unique identifier of a metric listed in the [`meta.db`](#metadb-performance-metrics-section)
+`02:`|f64|`value`     |4.0| Value of the metric indicated by `metricId`
+`0a:`|| **END**          || Fixed, see [Reader compatibility]
 
 {Idx} above refers to the following structure:
 
- Hex | Type | Name    | Description
- ---:| ---- | ------- | -------------------------------------------------------
-`00:`|u32|`ctxId`     | Unique identifier of a context listed in the [`meta.db`](#metadb-context-tree-section)
-`04:`|u64|`startIndex`| Start index of `*pValues` attributed to the referenced context
-`0c:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 4`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|u32|`ctxId`     |4.0| Unique identifier of a context listed in the [`meta.db`](#metadb-context-tree-section)
+`04:`|u64|`startIndex`|4.0| Start index of `*pValues` attributed to the referenced context
+`0c:`|| **END**          || Fixed, see [Reader compatibility]
 
 The sub-array of `*pValues` attributed to the context referenced by `ctxId`
 starts at index `startIndex` and ends just before the `startIndex` of the
@@ -678,7 +797,7 @@ Additional notes:
    to locate the value(s) for a particular context or metric.
  - `value` and `startIndex` are not aligned, however `metricId` and `ctxId` are.
    This should in general not pose a significant performance penalty.
-   See [Alignment properties](#alignment-properties) above.
+   See [Alignment properties] above.
 
 
 `profile.db` Hierarchical Identifier Tuple section
@@ -693,23 +812,25 @@ Additional notes:
 The Hierarchical Identifier Tuple section contains multiple Identifier Tuples,
 each of the following structure:
 
- Hex | Type | Name | Description
- ---:| ---- | ---- | ----------------------------------------------------------
-`00:`|u16|`nIds`   | Number of identifications in this tuple
+ Hex | Type | Name   | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------ | ---- | --------------------------------------------------
+`A 8`|| **ALIGNMENT**      || See [Alignment properties]
+`00:`|u16|`nIds`        |4.0| Number of identifications in this tuple
 |    |
-`08:`|{Id}xN|`ids` | Array of `nIds` identifications for an application thread
-` *:`|| **END**
+`08:`|{Id}[`nIds`]|`ids`|4.0| Identifications for an application thread
+` *:`|| **END**            || Extendable, see [Reader compatibility]
 
 {Id} above refers to the following structure:
 
- Hex | Type | Name    | Description
- ---:| ---- | ------- | -------------------------------------------------------
-`00:`|u8|`kind`       | One of the values listed in the [`meta.db` Identifier Names section][INsec].
+ Hex | Type | Name    | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------- | ---- | -------------------------------------------------
+`A 8`|| **ALIGNMENT**       || See [Alignment properties]
+`00:`|u8|`kind`          |4.0| One of the values listed in the [`meta.db` Identifier Names section][INsec].
 |    |
-`02:`|{Flags}|`flags` | See below.
-`04:`|u32|`logicalId` | Logical identifier value, may be arbitrary but dense towards 0.
-`08:`|u64|`physicalId`| Physical identifier value, eg. hostid or PCI bus index.
-`10:`|| **END**
+`02:`|{Flags}|`flags`    |4.0| See below.
+`04:`|u32|`logicalId`    |4.0| Logical identifier value, may be arbitrary but dense towards 0.
+`08:`|u64|`physicalId`   |4.0| Physical identifier value, eg. hostid or PCI bus index.
+`10:`|| **END**             || Fixed, see [Reader compatibility]
 
 [INsec]: #metadb-hierarchical-identifier-names-section
 
@@ -757,14 +878,11 @@ a particular metric can be obtained through a simple binary search.
 
 The `cct.db` file starts with the following header:
 
- Hex | Type | Name     | Description
- ---:| ---- | -------- | ------------------------------------------------------
-`00:`|u8x14|`magic`    | Format identifier, reads `HPCTOOLKITctxt` in ASCII
-`0e:`|u8|`majorVersion`| Major version number, currently 4
-`0f:`|u8|`minorVersion`| Minor version number, currently 0
-`10:`|u64|`szCtxInfos`  | Size of the [Context Info section][CIsec]
-`18:`|u8*(8)|`pCtxInfos`| Pointer to the [Context Info section][CIsec]
-`20:`|| **END**
+ Hex | Name        | Ver. | Section (see the [Common file structure])
+ ---:| ----------- | ---- | ----------------------------------------------------
+`00:`|                   || See [Common file structure]
+`10:`|`{sz,p}CtxInfos`|4.0| [Contexts Information][CIsec]
+`20:`| **END**           || Extendable, see [Reader compatibility]
 
 [CIsec]: #cctdb-context-info-section
 
@@ -779,19 +897,21 @@ The `cct.db` file ends with an 8-byte footer, reading `__ctx.db` in ASCII.
 
 The Context Info section starts with the following header:
 
- Hex | Type | Name      | Description
- ---:| ---- | --------- | -----------------------------------------------------
-`00:`|{CI}xN*(8)|`pCtxs`| Pointer to an array of `nCtxs` context descriptions
-`08:`|u32|`nCtxs`       | Number of contexts listed in this section
-`0c:`|u8|`szCtx`        | Size of a {CI} structure, currently 32
-`0d:`|| **END**
+ Hex | Type | Name       | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---------- | ---- | ----------------------------------------------
+`A 8`|| **ALIGNMENT**          || See [Alignment properties]
+`00:`|{CI}[`nCtxs`]*|`pCtxs`|4.0| Description for each context in this database
+`08:`|u32|`nCtxs`           |4.0| Number of contexts listed in this section
+`0c:`|u8|`szCtx`            |4.0| Size of a {CI} structure, currently 32
+`0d:`|| **END**                || Extendable, see [Reader compatibility]
 
 {CI} above refers to the following structure:
 
- Hex | Type | Name       | Description
- ---:| ---- | ---------- | -----------------------------------------------
-`00:`|[CSVB]|`valueBlock`| Header for the values for this Context
-`20:`|| **END**
+ Hex | Type | Name    | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ------  | ---- | -------------------------------------------------
+`A 8`|| **ALIGNMENT**       || See [Alignment properties]
+`00:`|[CSVB]|`valueBlock`|4.0| Header for the values for this Context
+`20:`|| **END**             || Extendable, see [Reader compatibility]
 
 [CSVB]: #context-major-sparse-value-block
 
@@ -811,30 +931,33 @@ Additional notes:
 
 Each Context-Major Sparse Value Block has the following structure:
 
- Hex | Type | Name          | Description
- ---:| ---- | ------------- | -------------------------------------------------
-`00:`|u64|`nValues`         | Number of non-zero values in this block
-`08:`|{Val}xN*(4)|`pValues` | Pointer to an array of `nValues` value pairs
-`10:`|u16|`nMetrics`        | Number of non-empty metrics in this block
+ Hex | Type | Name              | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ----------------- | ---- | ---------------------------------------
+`A 8`|| **ALIGNMENT**                 || See [Alignment properties]
+`00:`|u64|`nValues`                |4.0| Number of non-zero values
+`08:`|{Val}[`nValues`]*|`pValues`  |4.0| Profile-value pairs
+`10:`|u16|`nMetrics`               |4.0| Number of non-empty metrics
 |    |
-`18:`|{Idx}xN*(2)|`pMetricIndices`| Pointer to an array of `nMetrics` metric indices
-`20:`|| **END**
+`18:`|{Idx}[`nMetrics`]*|`pMetricIndices`|4.0| Mapping from metrics to values
+`20:`|| **END**                       || Fixed, see [Reader compatibility]
 
 {Val} above refers to the following structure:
 
- Hex | Type | Name   | Description
- ---:| ---- | ------ | ----------------------------------------------------------
-`00:`|u32|`profIndex`| Index of a profile listed in the [`profile.db`](#profiledb-profile-info-section)
-`04:`|f64|`value`    | Value attributed to the profile indicated by `profIndex`
-`0c:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 4`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|u32|`profIndex` |4.0| Index of a profile listed in the [`profile.db`](#profiledb-profile-info-section)
+`04:`|f64|`value`     |4.0| Value attributed to the profile indicated by `profIndex`
+`0c:`|| **END**          || Fixed, see [Reader compatibility]
 
 {Idx} above refers to the following structure:
 
- Hex | Type | Name    | Description
- ---:| ---- | ------- | -------------------------------------------------------
-`00:`|u16|`metricId`  | Unique identifier of a metric listed in the [`meta.db`](#metadb-performance-metrics-section)
-`02:`|u64|`startIndex`| Start index of `*pValues` from the associated metric
-`0a:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 2`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|u16|`metricId`  |4.0| Unique identifier of a metric listed in the [`meta.db`](#metadb-performance-metrics-section)
+`02:`|u64|`startIndex`|4.0| Start index of `*pValues` from the associated metric
+`0a:`|| **END**          || Fixed, see [Reader compatibility]
 
 The sub-array of `*pValues` from to the metric referenced by `metId` starts at
 index `startIndex` and ends just before the `startIndex` of the following {Idx}
@@ -857,7 +980,7 @@ Additional notes:
    to locate the value(s) for a particular metric or application thread.
  - `value` and `startIndex` are not aligned, however `profIdx` and `metricId`
    are. This should in general not pose a significant performance penalty.
-   See [Alignment properties](#alignment-properties) above.
+   See [Alignment properties] above.
 
 
 * * *
@@ -866,14 +989,11 @@ Additional notes:
 
 The `trace.db` file starts with the following header:
 
- Hex | Type | Name     | Description
- ---:| ---- | -------- | ------------------------------------------------------
-`00:`|u8x14|`magic`    | Format identifer, reads `HPCTOOLKITtrce` in ASCII
-`0e:`|u8|`majorVersion`| Major version number, currently 4
-`0f:`|u8|`minorVersion`| Minor version number, currently 0
-`10:`|u64|`szCtxTraces`  | Size of the [Context Trace Headers section][CTHsec]
-`18:`|u8*(8)|`pCtxTraces`| Pointer to the [Context Trace Headers section][CTHsec]
-`20:`|| **END**
+ Hex | Name         | Ver. | Section (see the [Common file structure])
+ ---:| ------------ | ---- | ---------------------------------------------------
+`00:`|                    || See [Common file structure]
+`10:`|`{sz,p}CtxTraces`|4.0| [Context Trace Headers][CTHsec]
+`20:`| **END**            || Extendable, see [Reader compatibility]
 
 [CTHsec]: #tracedb-context-trace-headers-section
 
@@ -884,33 +1004,36 @@ The `trace.db` file ends with an 8-byte footer, reading `trace.db` in ASCII.
 
 The Context Trace Headers sections starts with the following structure:
 
- Hex | Type | Name         | Description
- ---:| ---- | ------------ | ---------------------------------------------------
-`00:`|{CTH}xN*(8)|`pTraces`| Pointer to an array of `nTraces` trace headers
-`08:`|u32|`nTraces`        | Number of traces listed in this section
-`0c:`|u8|`szTrace`         | Size of a {TH} structure, currently 24
+ Hex | Type | Name            | Ver. | Description (see the [Formats legend])
+ ---:| ---- | --------------- | ---- | -----------------------------------------
+`A 8`|| **ALIGNMENT**               || See [Alignment properties]
+`00:`|{CTH}[`nTraces`]*|`pTraces`|4.0| Header for each trace
+`08:`|u32|`nTraces`              |4.0| Number of traces listed in this section
+`0c:`|u8|`szTrace`               |4.0| Size of a {TH} structure, currently 24
 |    |
-`10:`|u64|`minTimestamp`   | Smallest timestamp of the traces listed in `*pTraces`
-`18:`|u64|`maxTimestamp`   | Largest timestamp of the traces listed in `*pTraces`
-`20:`|| **END**
+`10:`|u64|`minTimestamp`  |4.0| Smallest timestamp of the traces listed in `*pTraces`
+`18:`|u64|`maxTimestamp`  |4.0| Largest timestamp of the traces listed in `*pTraces`
+`20:`|| **END**              || Extendable, see [Reader compatibility]
 
 {CTH} above refers to the following structure:
 
- Hex | Type | Name       | Description
- ---:| ---- | ---------- | ----------------------------------------------------
-`00:`|u32|`profIndex`    | Index of a profile listed in the [`profile.db`](#profiledb-profile-info-section)
+ Hex | Type | Name  | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ----- | ---- | ---------------------------------------------------
+`A 8`|| **ALIGNMENT**     || See [Alignment properties]
+`00:`|u32|`profIndex`  |4.0| Index of a profile listed in the [`profile.db`](#profiledb-profile-info-section)
 |    |
-`08:`|{Elem}*(8)|`pStart`| Pointer to the first element of the trace line (array)
-`10:`|{Elem}*(4)|`pEnd`  | Pointer to the after-end element of the trace line (array)
-`18:`|| **END**
+`08:`|{Elem}*|`pStart` |4.0| Pointer to the first element of the trace line (array)
+`10:`|{Elem}*|`pEnd`   |4.0| Pointer to the after-end element of the trace line (array)
+`18:`|| **END**          || Extendable, see [Reader compatibility]
 
 {Elem} above refers to the following structure:
 
- Hex | Type | Name   | Description
- ---:| ---- | ------ | --------------------------------------------------------
-`00:`|u64|`timestamp`| Timestamp of the trace sample (nanoseconds since the epoch)
-`08:`|u32|`ctxId`    | Unique identifier of a context listed in [`meta.db`](#metadb-context-tree-section)
-`0c:`|| **END**
+ Hex | Type | Name | Ver. | Description (see the [Formats legend])
+ ---:| ---- | ---- | ---- | ----------------------------------------------------
+`A 4`|| **ALIGNMENT**    || See [Alignment properties]
+`00:`|u64|`timestamp` |4.0| Timestamp of the trace sample (nanoseconds since the epoch)
+`08:`|u32|`ctxId`     |4.0| Unique identifier of a context listed in [`meta.db`](#metadb-context-tree-section)
+`0c:`|| **END**          || Fixed, see [Reader compatibility]
 
 Additional notes:
  - The array pointed to by `pTraces` is completely within the Context Trace
@@ -922,4 +1045,4 @@ Additional notes:
    should be read and used when accessing `*pTraces`.
  - `timestamp` is only aligned for even elements in a trace line array. Where
    possible, readers are encouraged to prefer accessing even elements.
-   See [Alignment properties](#alignment-properties) above.
+   See [Alignment properties] above.
