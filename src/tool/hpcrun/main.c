@@ -221,6 +221,7 @@ bool hpcrun_no_unwind = false;
  * (public declaration) thread-local variables
  *****************************************************************************/
 static __thread bool hpcrun_thread_suppress_sample = true;
+static __thread bool hpcrun_thread_monitor_forced = false;
 
 //***************************************************************************
 // local variables 
@@ -790,7 +791,7 @@ hpcrun_thread_init(int id, local_thread_data_t* local_thread_data, bool has_trac
   hpcrun_thread_init_mem_pool_once(id, thr_ctxt, has_trace, demand_new_thread);
   
   hpcrun_get_thread_data()->inside_hpcrun = 1;
-  
+
   
   if (ENABLED(THREAD_CTXT)) {
     if (thr_ctxt) {
@@ -857,8 +858,6 @@ hpcrun_thread_fini(epoch_t *epoch)
     // add separator for each compact thread
     bool add_separator = true;
     hpcrun_threadMgr_data_put(epoch, td, add_separator);
-
-    TMSG(PROCESS, "End of thread");
   }
 }
 
@@ -1196,6 +1195,13 @@ monitor_init_thread_support(void)
   hpcrun_safe_exit();
 }
 
+void hpcrun_thread_monitor_force_on() {
+  hpcrun_thread_monitor_forced = true;
+}
+
+void hpcrun_thread_monitor_force_off() {
+  hpcrun_thread_monitor_forced = false;
+}
 
 void*
 monitor_thread_pre_create(void)
@@ -1210,13 +1216,15 @@ monitor_thread_pre_create(void)
   monitor_get_new_thread_info(&mti);
   void *thread_pre_create_address = mti.mti_create_return_addr;
 
-  if (module_ignore_map_inrange_lookup(thread_pre_create_address)) {
-    return MONITOR_IGNORE_NEW_THREAD;
+  if (!hpcrun_thread_monitor_forced) {
+    if (module_ignore_map_inrange_lookup(thread_pre_create_address)) {
+      return MONITOR_IGNORE_NEW_THREAD;
+    }
   }
+
   bool is_child = false;
   // outer initialization
-   hpcrun_prepare_measurement_subsystem(is_child);
-
+  hpcrun_prepare_measurement_subsystem(is_child);
 
   hpcrun_safe_enter();
   local_thread_data_t* rv = hpcrun_malloc(sizeof(local_thread_data_t));
@@ -1295,14 +1303,16 @@ monitor_init_thread(int tid, void* data)
 
   void *thread_begin_address = monitor_get_addr_thread_start();
 
-  if (module_ignore_map_inrange_lookup(thread_begin_address)) {
-    hpcrun_thread_suppress_sample = true;
+  if (!hpcrun_thread_monitor_forced) {
+    if (module_ignore_map_inrange_lookup(thread_begin_address)) {
+      hpcrun_thread_suppress_sample = true;
+    }
   }
 
   hpcrun_safe_enter();
 
   TMSG(THREAD,"init thread %d",tid);
-  void* thread_data = hpcrun_thread_init(tid, (local_thread_data_t*) data, ! hpcrun_thread_suppress_sample);
+  void* thread_data = hpcrun_thread_init(tid, (local_thread_data_t*) data, !hpcrun_thread_suppress_sample);
   TMSG(THREAD,"back from init thread %d",tid);
 
   hpcrun_threadmgr_thread_new();

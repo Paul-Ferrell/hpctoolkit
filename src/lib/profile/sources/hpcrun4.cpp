@@ -50,11 +50,6 @@
 #include "lib/prof-lean/hpcrun-fmt.h"
 #include "lib/prof-lean/placeholders.h"
 
-// TODO: Remove and change this once new-cupti is finalized
-#define HPCRUN_GPU_ROOT_NODE 65533
-#define HPCRUN_GPU_RANGE_NODE 65532
-#define HPCRUN_GPU_CONTEXT_NODE 65531
-
 using namespace hpctoolkit;
 using namespace sources;
 
@@ -346,7 +341,7 @@ bool Hpcrun4::realread(const DataClass& needed) try {
                               << Scope(Scope::placeholder, n.lm_ip);
             return false;
           }
-        } else if(n.lm_id == HPCRUN_GPU_ROOT_NODE) {
+        } else if(n.lm_id == HPCRUN_FMT_GPU_RANGE_ROOT_NODE) {
           // Outlined range root node. No corresponding object.
           nodes.emplace(id, (int)0);
         } else {
@@ -388,7 +383,7 @@ bool Hpcrun4::realread(const DataClass& needed) try {
       const auto& par = par_it->second;
       if(const auto* p_x = std::get_if<std::pair<Context*, Context*>>(&par)) {
         Context& par = *p_x->second;
-        if(n.lm_id == HPCRUN_GPU_CONTEXT_NODE) {
+        if(n.lm_id == HPCRUN_FMT_GPU_CONTEXT_NODE) {
           // This is a reference to an outlined range tree, rooted at grandpar
           // and par is the entry.
           nodes.emplace(id, std::make_pair(p_x,
@@ -446,7 +441,7 @@ bool Hpcrun4::realread(const DataClass& needed) try {
         util::log::info{} << "Encountered invalid child of un-unwindable cct node";
         return false;
       } else if(const auto* p_x = std::get_if<std::pair<const std::pair<Context*, Context*>*, PerThreadTemporary*>>(&par)) {
-        if(n.lm_id != HPCRUN_GPU_RANGE_NODE) {
+        if(n.lm_id != HPCRUN_FMT_GPU_RANGE_NODE) {
           // Children of CONTEXT nodes must be RANGE nodes.
           util::log::info{} << "Encountered invalid non-GPU_RANGE child of GPU_CONTEXT node";
           return false;
@@ -459,14 +454,14 @@ bool Hpcrun4::realread(const DataClass& needed) try {
         util::log::info{} << "Encountered invalid child of inline GPU_RANGE node";
         return false;
       } else if(std::holds_alternative<int>(par)) {
-        if(n.lm_id != HPCRUN_GPU_CONTEXT_NODE) {
+        if(n.lm_id != HPCRUN_FMT_GPU_CONTEXT_NODE) {
           // Children of the range-root must be GPU_CONTEXT nodes.
           util::log::info{} << "Encountered invalid non-GPU_CONTEXT child of outlined range tree root";
           return false;
         }
         nodes.emplace(id, &sink.mergedThread(outlineGpuContext(n.lm_ip)));
       } else if(auto* pp_thread = std::get_if<PerThreadTemporary*>(&par)) {
-        if(n.lm_id != HPCRUN_GPU_RANGE_NODE) {
+        if(n.lm_id != HPCRUN_FMT_GPU_RANGE_NODE) {
           // Children of CONTEXT nodes must be RANGE nodes.
           util::log::info{} << "Encountered invalid non-GPU_RANGE child of GPU_CONTEXT node";
           return false;
