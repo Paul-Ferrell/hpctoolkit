@@ -1,0 +1,211 @@
+stages:
+  - dependencies
+  - build
+
+# Only spawn pipelines when we actually want them: MRs and branches without MRs
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
+# Construct a docker image updated for this particular run
+.deps-docker:
+  tags: [docker]
+  image: docker:20.10.12
+  services: [docker:20.10.12-dind]
+  stage: dependencies
+  timeout: 3 hours
+  before_script:
+  - export DOCKER_HOST=tcp://docker:2376 DOCKER_TLS_CERTDIR=/certs
+  - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+  - >-
+    ./.ci/docker-base.sh $OS
+    $CI_REGISTRY_IMAGE/deps:base-$OS-$CI_COMMIT_REF_SLUG
+    $CI_REGISTRY_IMAGE/deps:base-$OS-$CI_DEFAULT_BRANCH
+    $CI_REGISTRY_IMAGE/deps:base-$OS-latest
+    --
+    $CI_REGISTRY_IMAGE/deps:base-$OS-$CI_COMMIT_SHA
+    $CI_REGISTRY_IMAGE/deps:base-$OS-$CI_COMMIT_REF_SLUG
+    $CI_REGISTRY_IMAGE/deps:base-$OS-latest
+  - >-
+    ./.ci/docker-deps.sh $CI_REGISTRY_IMAGE/deps:base-$OS-$CI_COMMIT_SHA
+    $CI_REGISTRY_IMAGE/deps:$OS-$CI_COMMIT_REF_SLUG
+    $CI_REGISTRY_IMAGE/deps:$OS-$CI_DEFAULT_BRANCH
+    $CI_REGISTRY_IMAGE/deps:$OS-latest
+    --
+    $CI_REGISTRY_IMAGE/deps:$OS-$CI_COMMIT_SHA
+    $CI_REGISTRY_IMAGE/deps:$OS-$CI_COMMIT_REF_SLUG
+    $CI_REGISTRY_IMAGE/deps:$OS-latest
+
+deps-docker-deb10:
+  extends: .deps-docker
+  variables:
+    OS: deb10
+deps-docker-deb11:
+  extends: .deps-docker
+  variables:
+    OS: deb11
+
+# Base for the buildmany jobs
+.buildmany:
+  stage: build
+  allow_failure:
+    exit_codes: 14  # Indicates autogoo mismatch
+  artifacts:
+    paths:
+    - autogoo.diff   # Autogoo mismatch diff
+    - cc-deps.missed      # Expected sources not compiled
+    - cc-deps.unexpected  # Unexpected sources compiled
+    - pass-*/*.diff  # Per-pass diffs
+    - pass-*/*.log   # Per-pass logs
+    when: always
+  coverage: '/Compiled \d+\.\d+% of expected files/'
+  script:
+  # Re-do the autogoo. If we're in a minimum variant, throw a warning if the
+  # goo changed while doing this.
+  # This has to be done before the ccache setup since we edit ccache.conf
+  - (eval `spack -e .senv/$VARIANT load --sh autoconf automake libtool` && ./autogen)
+  - git diff --diff-filter=M > autogoo.diff
+  # Setup ccache and the compiler wrappers so we can build fast
+  - export CCACHE_CONFIGPATH="`realpath .ci/ccache.conf`"
+  - sed -i "s%@CI_PROJECT_DIR@%${CI_PROJECT_DIR}%g" "$CCACHE_CONFIGPATH"
+  - sed "s%@CC@%`cat .ccspec/$COMPILER | awk '{print $1}'`%g" .ci/cc.in > .ci/cc
+  - sed "s%@CC@%`cat .ccspec/$COMPILER | awk '{print $2}'`%g" .ci/cc.in > .ci/c++
+  - chmod a+x .ci/cc .ci/c++
+  - ccache --zero-stats
+  # The compiler wrappers also support outputting the list of used files, stash
+  # those somewhere for compile-coverage checking.
+  - export CC_DEPLIST_OUTPUT="`realpath .cc-deps/`" CC_BASE_DIR="`realpath .`"
+  - mkdir -p "$CC_DEPLIST_OUTPUT"
+  # Setup some variables to make the configs later easier to write
+  - >-
+    COMMON_FLAGS="
+    CC=`realpath .ci/cc` CXX=`realpath .ci/c++`
+    --prefix=`realpath install/`
+    --with-binutils=`spack -e .senv/$VARIANT location -i binutils`
+    --with-boost=`spack -e .senv/$VARIANT location -i boost`
+    --with-bzip=`spack -e .senv/$VARIANT location -i bzip2`
+    --with-dyninst=`spack -e .senv/$VARIANT location -i dyninst`
+    --with-elfutils=`spack -e .senv/$VARIANT location -i elfutils`
+    --with-gotcha=`spack -e .senv/$VARIANT location -i gotcha`
+    --with-tbb=`spack -e .senv/$VARIANT location -i intel-tbb`
+    --with-libdwarf=`spack -e .senv/$VARIANT location -i libdwarf`
+    --with-libmonitor=`spack -e .senv/$VARIANT location -i libmonitor`
+    --with-libunwind=`spack -e .senv/$VARIANT location -i libunwind`
+    --with-mbedtls=`spack -e .senv/$VARIANT location -i mbedtls`
+    --with-xerces=`spack -e .senv/$VARIANT location -i xerces-c`
+    --with-lzma=`spack -e .senv/$VARIANT location -i xz`
+    --with-zlib=`spack -e .senv/$VARIANT location -i zlib`
+    --with-xed=`spack -e .senv/$VARIANT location -i intel-xed`
+    --with-memkind=`spack -e .senv/$VARIANT location -i memkind`
+    "
+  - PAPI_FLAGS="--with-papi=`spack -e .senv/$VARIANT location -i papi`"
+  - PERFMON_FLAGS="--with-perfmon=`spack -e .senv/$VARIANT location -i libpfm4`"
+  # Setup the build dir and start trying builds!
+  - mkdir build/
+  - echo "=== Standard non-MPI build ==="
+  - PASS=standard-nompi FLAGS="$COMMON_FLAGS $PAPI_FLAGS"
+  - cat .ci/install_manifest/common.txt > install_manifest
+  - &buildtest_pass
+    - mkdir pass-$PASS/
+    - |
+      if ! (cd build/ && ../configure $FLAGS) > pass-$PASS/configure.log; then
+         if [ -e build/config.log ]; then cp build/config.log pass-$PASS/config.log; fi
+         exit 1
+      fi
+      cp build/config.log pass-$PASS/config.log
+    - make -C build/ -j16 > pass-$PASS/build.log
+    - make -C build/ install > pass-$PASS/install.log
+    - sort install_manifest > install_manifest.expected
+    - find install/ -type f | sort > install_manifest.got
+    - |
+      if [ -n "$(comm -23 install_manifest.expected install_manifest.got)" ]; then
+        echo "The following files were not installed!:"
+        comm -23 install_manifest.expected install_manifest.got
+        exit 1
+      fi
+    - diff -u install_manifest.expected install_manifest.got > pass-$PASS/install_manifest.diff || true
+    - rm -r build/ install/ && mkdir build/
+  - echo "=== Non-PAPI non-MPI build ==="
+  - PASS=nopapi-nompi FLAGS="$COMMON_FLAGS $PERFMON_FLAGS"
+  - cat .ci/install_manifest/common.txt > install_manifest
+  - *buildtest_pass
+  # Print out the statistics of using ccache for this build
+  - ccache --show-stats
+  # Get the list of checked-in files used during the build
+  - git ls-files | sort --unique > ls-files.all
+  - sort --unique .cc-deps/* | comm -12 - ls-files.all > cc-deps.got
+  # Compare against the list of files we expected in this run
+  - grep -E '\.((h|c)(pp)?|i|S|flag-defns)$' ls-files.all | sort --unique > cc-deps.expected
+  - comm -23 cc-deps.expected cc-deps.got > cc-deps.missed
+  - comm -13 cc-deps.expected cc-deps.got > cc-deps.unexpected
+  - NUM_EXPECTED=$(cat cc-deps.expected | wc --lines)
+  - NUM_GOT=$(comm -12 cc-deps.expected cc-deps.got | wc --lines)
+  - echo "Compiled $(echo $((NUM_GOT * 100000 / NUM_EXPECTED)) | sed 's/\(...\)$/.\1/')% of expected files"
+  # If we had an autogoo mismatch, indicate that as a warning
+  - |
+    if [ -z "$(cat autogoo.diff)" ]; then
+      rm autogoo.diff
+    elif echo "$VARIANT" | grep --quiet '^minimum'; then
+      echo "WARNING: Autogoo mismatch! Diff will be uploaded for perusal."
+      exit 14
+    fi
+
+.buildmany-docker:
+  extends: .buildmany
+  tags: [docker]
+  image: $CI_REGISTRY_IMAGE/deps:$OS-$CI_COMMIT_SHA
+  before_script:
+  - ln --symbolic /opt/senv .senv
+  - ln --symbolic /opt/compilers .ccspec
+  cache:
+    key: ccache-$OS-$COMPILER
+    paths: [.ccache/]
+    when: always
+
+buildmany-deb10:
+  extends: .buildmany-docker
+  needs: [deps-docker-deb10]
+  variables:
+    OS: deb10
+  parallel:
+    matrix:
+    - COMPILER: [gcc-7, gcc-8]
+      VARIANT: &variants [minimum]
+buildmany-deb11:
+  extends: .buildmany-docker
+  needs: [deps-docker-deb11]
+  variables:
+    OS: deb11
+  parallel:
+    matrix:
+    - COMPILER: [gcc-9, gcc-10]
+      VARIANT: *variants
+
+# Versions of the buildmany job sequence that can run on a shell executor.
+buildmany-shell:
+  extends: .buildmany
+  needs: []
+  tags: [shell]
+  before_script:
+  - ./.ci/shell-init.sh "$COMPILER" ccache
+  - source .spackuse
+  - mkdir -p .ccspec && echo 'cc c++' > .ccspec/system
+  cache:
+  - key: ccache-$COMPILER
+    paths: [.ccache/]
+    when: always
+  - key: spack
+    paths: [.spackcache/]
+    when: always
+  - key: spack-$COMPILER
+    paths: [.spackcache-percc/]
+    when: always
+  parallel:
+    matrix:
+    - COMPILER: [system, gcc@7, gcc@8, gcc@9, gcc@10, gcc@11]
+      VARIANT: *variants
+

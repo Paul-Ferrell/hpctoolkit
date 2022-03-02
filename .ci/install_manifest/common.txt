@@ -1,0 +1,5 @@
+install/bin/hpcrun
+install/bin/hpclink
+install/bin/hpcstruct
+install/bin/hpcprof
+install/include/hpctoolkit.h

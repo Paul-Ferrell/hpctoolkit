@@ -1,0 +1,30 @@
+spack:
+  concretization: together
+  view: false
+
+  # Direct dependencies of HPCToolkit, lowest acceptable version
+  specs:
+  - autoconf@2.69
+  - automake@1.15.1
+  - libtool@2.4.6
+  - binutils@2.36.1 +libiberty ~nls
+  - 'boost@1.77.0 +atomic +date_time +filesystem +system +thread +timer
+                  +graph +regex +shared +multithreaded
+                  ~debug ~mpi ~python ~iostreams ~numpy
+                  visibility=global'
+  - bzip2@1.0.8 +shared
+  - dyninst@12.0.1 +openmp build_type=Release
+  - elfutils@0.186 +bzip2 +xz ~nls
+  - gotcha@1.0.3 build_type=Release
+  - intel-tbb@2020.3 +shared +tm
+  - libdwarf@20180129
+  - libmonitor@2021.11.08
+  - libunwind@1.5.0 +xz +pic
+  - mbedtls@2.27.0 +pic
+  - xerces-c@3.2.3 transcoder=iconv netaccessor=none
+  - xz@5.2.5 +pic
+  - zlib@1.2.11 +optimize +shared
+  - intel-xed@12.0.1
+  - memkind@1.12.0
+  - papi@6.0.0.1
+  - libpfm4@4.11.0

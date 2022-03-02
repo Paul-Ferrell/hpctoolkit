@@ -1,0 +1,22 @@
+#!/bin/sh -e
+
+# Scan the arguments for an -MF argument. If we have one we'll use that.
+depfile=
+nextIsMF=
+for arg in "$@"; do
+  if [ "$arg" = "-MF" ]; then nextIsMF=1
+  elif [ -n "$nextIsMF" ]; then
+    depfile="$arg"
+    break
+  fi
+done
+
+# Run the compiler to generate everything
+ccache @CC@ "$@"
+
+# Copy the depfile out to someplace convenient
+if [ -n "$depfile" ] && [ -n "$CC_DEPLIST_OUTPUT" ]; then
+  grep --only-matching --word-regexp '[^\\[:space:]][^[:space:]]*[^:[:space:]]' "$depfile" \
+  | (while read line; do realpath --relative-base="$CC_BASE_DIR" "$line"; done) \
+  | grep '^[^/]' > "`mktemp -p "$CC_DEPLIST_OUTPUT" out.XXXXXXXX`"
+fi

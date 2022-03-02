@@ -1,0 +1,36 @@
+# This is one of the base OS images used for the CI bits.
+# If you need packages available from the OS, add them here.
+
+FROM debian:10-slim
+COPY hash transfer.sh /
+
+# Make sure we're up-to-date here, and install everything
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install --yes \
+  git curl python3 python3-dev unzip file zstd subversion mercurial patchelf \
+  build-essential gfortran \
+  gcc-7 g++-7 gfortran-7 gcc-8 g++-8 gfortran-8 \
+  ccache tar xz-utils \
+  && apt-get clean && rm -r /var/lib/apt/lists/*
+
+# List all the supported compiler configurations in /opt/compilers.
+RUN mkdir /opt/compilers \
+  && echo 'gcc-7 g++-7' > /opt/compilers/gcc-7 \
+  && echo 'gcc-8 g++-8' > /opt/compilers/gcc-8
+
+# Shallow-clone the latest version of Spack out there
+RUN git clone \
+  --depth=10 --single-branch --no-tags \
+  --origin=upstream --branch=develop \
+  https://github.com/spack/spack.git /opt/spack
+
+# Do some setup so we can actually use Spack in the real world
+ENV SPACK_DISABLE_LOCAL_CONFIG=1
+ENV SPACK_USER_CACHE_PATH=/var/cache/spack
+RUN ln --symbolic /opt/spack/bin/spack /usr/bin/spack \
+  && ln --symbolic /opt/spack/share/spack/setup-env.sh /etc/profile.d/spack.sh
+
+# Make sure Spack is bootstrapped properly, so we don't have to do it again
+RUN spack bootstrap enable && spack spec zlib \
+  && spack bootstrap status --optional \
+  && ! spack bootstrap status --optional 2>&1 | grep --quiet 'FAIL'
+
